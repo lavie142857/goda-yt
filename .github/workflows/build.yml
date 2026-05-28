@@ -28,13 +28,14 @@ jobs:
           NODE_ENV: production
 
       - name: Package app (portable)
-        run: npx electron-builder --win portable --publish always
+        run: npx electron-builder --win portable --publish never
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_ENV: production
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Create Release and Upload
+        uses: softprops/action-gh-release@v1
         with:
-          name: flash-media-portable
-          path: release/FLASH-MEDIA-Portable-win64.zip
+          files: release/FLASH-MEDIA-Portable-win64.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
