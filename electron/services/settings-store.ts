@@ -1,0 +1,155 @@
+import { app } from 'electron'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import type { AppSettings, OutputFormat, YtDlpAutoUpdateMode } from '../types.js'
+
+const SETTINGS_FILE = 'settings.json'
+
+export class SettingsStore {
+  private readonly settingsPath: string
+
+  private settings: AppSettings
+
+  constructor() {
+    const userDataPath = app.getPath('userData')
+    this.settingsPath = path.join(userDataPath, SETTINGS_FILE)
+    this.settings = this.load()
+    this.ensureOutputDir(this.settings.outputDir)
+  }
+
+  get(): AppSettings {
+    return { ...this.settings }
+  }
+
+  update(payload: Partial<AppSettings>): AppSettings {
+    const next: AppSettings = {
+      ...this.settings,
+      ...payload,
+      maxConcurrent: clampNumber(payload.maxConcurrent, 1, 5, this.settings.maxConcurrent),
+      maxRetries: clampNumber(payload.maxRetries, 0, 5, this.settings.maxRetries),
+      outputDir: payload.outputDir?.trim() || this.settings.outputDir,
+      defaultFormat: normalizeOutputFormat(payload.defaultFormat, this.settings.defaultFormat),
+      showSettingsPanel: normalizeBoolean(payload.showSettingsPanel, this.settings.showSettingsPanel),
+      autoUpdateYtDlp: normalizeBoolean(payload.autoUpdateYtDlp, this.settings.autoUpdateYtDlp),
+      ytDlpAutoUpdateMode: normalizeAutoUpdateMode(payload.ytDlpAutoUpdateMode, this.settings.ytDlpAutoUpdateMode),
+      lastYtDlpAutoUpdateAt: normalizeNullableTimestamp(
+        payload.lastYtDlpAutoUpdateAt,
+        this.settings.lastYtDlpAutoUpdateAt,
+      ),
+    }
+
+    this.ensureOutputDir(next.outputDir)
+    this.settings = next
+    this.persist()
+    return this.get()
+  }
+
+  private load(): AppSettings {
+    const defaultSettings = getDefaultSettings()
+
+    try {
+      const raw = readFileSync(this.settingsPath, 'utf8')
+      const parsed = JSON.parse(raw) as Partial<AppSettings>
+      return {
+        ...defaultSettings,
+        ...parsed,
+        maxConcurrent: clampNumber(parsed.maxConcurrent, 1, 5, defaultSettings.maxConcurrent),
+        maxRetries: clampNumber(parsed.maxRetries, 0, 5, defaultSettings.maxRetries),
+        outputDir: parsed.outputDir?.trim() || defaultSettings.outputDir,
+        defaultFormat: normalizeOutputFormat(parsed.defaultFormat, defaultSettings.defaultFormat),
+        showSettingsPanel: normalizeBoolean(parsed.showSettingsPanel, defaultSettings.showSettingsPanel),
+        autoUpdateYtDlp: normalizeBoolean(parsed.autoUpdateYtDlp, defaultSettings.autoUpdateYtDlp),
+        ytDlpAutoUpdateMode: normalizeAutoUpdateMode(parsed.ytDlpAutoUpdateMode, defaultSettings.ytDlpAutoUpdateMode),
+        lastYtDlpAutoUpdateAt: normalizeNullableTimestamp(
+          parsed.lastYtDlpAutoUpdateAt,
+          defaultSettings.lastYtDlpAutoUpdateAt,
+        ),
+      }
+    } catch {
+      return defaultSettings
+    }
+  }
+
+  private persist(): void {
+    writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2), 'utf8')
+  }
+
+  private ensureOutputDir(outputDir: string): void {
+    mkdirSync(outputDir, { recursive: true })
+  }
+}
+
+function getDefaultSettings(): AppSettings {
+  const outputDir = path.join(app.getPath('videos'), 'FLASH MEDIA')
+  return {
+    maxConcurrent: 2,
+    maxRetries: 2,
+    outputDir,
+    defaultFormat: 'mp4',
+    showSettingsPanel: false,
+    autoUpdateYtDlp: true,
+    ytDlpAutoUpdateMode: 'weekly',
+    lastYtDlpAutoUpdateAt: null,
+  }
+}
+
+function clampNumber(
+  value: number | undefined,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
+  if (value === undefined || Number.isNaN(value)) {
+    return fallback
+  }
+
+  return Math.min(max, Math.max(min, Math.round(value)))
+}
+
+function normalizeOutputFormat(
+  value: OutputFormat | undefined,
+  fallback: OutputFormat,
+): OutputFormat {
+  if (value === 'mp4' || value === 'webm' || value === 'mkv' || value === 'avi' || value === 'mov') {
+    return value
+  }
+
+  return fallback
+}
+
+function normalizeBoolean(
+  value: boolean | undefined,
+  fallback: boolean,
+): boolean {
+  if (typeof value === 'boolean') {
+    return value
+  }
+
+  return fallback
+}
+
+function normalizeAutoUpdateMode(
+  value: YtDlpAutoUpdateMode | undefined,
+  fallback: YtDlpAutoUpdateMode,
+): YtDlpAutoUpdateMode {
+  if (value === 'weekly' || value === 'on-start') {
+    return value
+  }
+
+  return fallback
+}
+
+function normalizeNullableTimestamp(
+  value: number | null | undefined,
+  fallback: number | null,
+): number | null {
+  if (value === null) {
+    return null
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return value
+  }
+
+  return fallback
+}

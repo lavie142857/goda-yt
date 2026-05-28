@@ -1,0 +1,40 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build app
+        run: npm run build
+        env:
+          NODE_ENV: production
+
+      - name: Package app (portable)
+        run: npx electron-builder --win portable --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          NODE_ENV: production
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flash-media-portable
+          path: release/FLASH-MEDIA-Portable-win64.zip

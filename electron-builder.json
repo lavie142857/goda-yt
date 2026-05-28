@@ -1,0 +1,44 @@
+{
+  "appId": "com.flashmedia.app",
+  "productName": "FLASH MEDIA",
+  "directories": {
+    "buildResources": "public",
+    "output": "release"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*",
+    "node_modules/**/*",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "bin",
+      "to": "bin"
+    }
+  ],
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "lavie142857",
+      "repo": "goda-yt"
+    }
+  ],
+  "win": {
+    "icon": "public/icon.ico",
+    "target": [
+      {
+        "target": "portable",
+        "arch": ["x64"]
+      }
+    ]
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "FLASH MEDIA"
+  }
+}
+

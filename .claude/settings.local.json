@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Bash(dir /B)",
+      "Bash(findstr /V \"node_modules dist\")",
+      "Bash(npx vite *)",
+      "Bash(dir /B scripts)",
+      "Bash(dir /B scripts\\\\windows)",
+      "Bash(dir /B docs)",
+      "PowerShell(Move-Item -LiteralPath \"C:\\\\Users\\\\Admin\\\\Desktop\\\\YTvibez\\\\launch-app.vbs\" -Destination \"C:\\\\Users\\\\Admin\\\\Desktop\\\\YTvibez\\\\GODA YT.vbs\" -Force)",
+      "Bash(cat \"C:\\\\Users\\\\Admin\\\\.claude\\\\projects\\\\C--Users-Admin-Desktop-GODA-YT\\\\memory\\\\MEMORY.md\")",
+      "Bash(wc -l src/App.css src/index.css)",
+      "Bash(echo \"exit:$?\")",
+      "Bash(npx eslint *)",
+      "Bash(npm run *)",
+      "Bash(echo \"=== build exit: $? ===\")",
+      "Bash(echo \"=== exit: $? ===\")",
+      "Bash(echo \"build exit:$?\")",
+      "Bash(echo \"tsc:$?\")",
+      "Bash(echo \"lint:$?\")",
+      "Bash(echo \"build:$?\")",
+      "Bash(convert --version)",
+      "Bash(echo \"renderer tsc:$?\")",
+      "Bash(echo \"electron tsc:$?\")",
+      "Bash(./node_modules/electron/dist/electron.exe scripts/shoot.cjs)",
+      "Bash(ls -la /c/ffmpeg/bin/ 2>/dev/null | grep -iE \"ffmpeg|ffprobe\" ; echo \"---sizes---\"; du -h /c/ffmpeg/bin/ffmpeg.exe /c/ffmpeg/bin/ffprobe.exe 2>/dev/null)",
+      "Bash(cp /c/ffmpeg/bin/ffmpeg.exe bin/ffmpeg.exe)",
+      "Bash(cp /c/ffmpeg/bin/ffprobe.exe bin/ffprobe.exe)",
+      "Bash(npm i *)",
+      "Bash(node -e \"console.log\\('electron-updater:', require\\('electron-updater/package.json'\\).version\\)\")",
+      "Bash(npx electron-builder *)",
+      "Bash(echo \"=== BUILDER EXIT: $? ===\")"
+    ]
+  }
+}

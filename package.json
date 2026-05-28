@@ -1,0 +1,46 @@
+{
+  "name": "goda-yt",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron:build\" \"npm:dev:electron\"",
+    "dev:renderer": "vite",
+    "dev:electron:build": "npm run ensure:electron:cjs && tsc -p tsconfig.electron.json --watch",
+    "dev:electron": "wait-on http-get://localhost:5173 file:dist-electron/main.js file:dist-electron/preload.js && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 node ./scripts/run-electron.cjs",
+    "build": "npm run ensure:electron:cjs && tsc -b && vite build",
+    "build:electron": "npm run ensure:electron:cjs && tsc -p tsconfig.electron.json",
+    "build:renderer": "vite build",
+    "ensure:electron:cjs": "node ./scripts/ensure-electron-cjs.mjs",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "start": "npm run ensure:electron:cjs && cross-env NODE_ENV=production node ./scripts/run-electron.cjs",
+    "package": "npm run build && npx electron-builder --publish never",
+    "package:win": "npm run build && npx electron-builder --win --publish never",
+    "package:portable": "npm run build && npx electron-builder --win portable --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^24.12.2",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^41.2.1",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.4.0",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.58.0",
+    "vite": "^8.0.4",
+    "wait-on": "^9.0.5"
+  }
+}
