@@ -1,4 +1,5 @@
 import { app } from 'electron'
+import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { AppLanguage, AppSettings, OutputFormat, YtDlpAutoUpdateMode } from '../types.js'
@@ -15,6 +16,14 @@ export class SettingsStore {
     this.settingsPath = path.join(userDataPath, SETTINGS_FILE)
     this.settings = this.load()
     this.ensureOutputDir(this.settings.outputDir)
+    this.ensureInstallId()
+  }
+
+  private ensureInstallId(): void {
+    if (!this.settings.telemetryInstallId) {
+      this.settings.telemetryInstallId = randomUUID()
+      this.persist()
+    }
   }
 
   get(): AppSettings {
@@ -37,6 +46,9 @@ export class SettingsStore {
         this.settings.lastYtDlpAutoUpdateAt,
       ),
       language: normalizeLanguage(payload.language, this.settings.language),
+      telemetryEnabled: normalizeBoolean(payload.telemetryEnabled, this.settings.telemetryEnabled),
+      telemetryInstallId: this.settings.telemetryInstallId,
+      telemetrySent: normalizeBoolean(payload.telemetrySent, this.settings.telemetrySent),
     }
 
     this.ensureOutputDir(next.outputDir)
@@ -66,6 +78,12 @@ export class SettingsStore {
           defaultSettings.lastYtDlpAutoUpdateAt,
         ),
         language: normalizeLanguage(parsed.language, defaultSettings.language),
+        telemetryEnabled: normalizeBoolean(parsed.telemetryEnabled, defaultSettings.telemetryEnabled),
+        telemetryInstallId:
+          typeof parsed.telemetryInstallId === 'string'
+            ? parsed.telemetryInstallId
+            : defaultSettings.telemetryInstallId,
+        telemetrySent: normalizeBoolean(parsed.telemetrySent, defaultSettings.telemetrySent),
       }
     } catch {
       return defaultSettings
@@ -93,6 +111,9 @@ function getDefaultSettings(): AppSettings {
     ytDlpAutoUpdateMode: 'weekly',
     lastYtDlpAutoUpdateAt: null,
     language: 'vi',
+    telemetryEnabled: true,
+    telemetryInstallId: '',
+    telemetrySent: false,
   }
 }
 

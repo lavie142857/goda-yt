@@ -94,7 +94,7 @@ export interface Messages {
   diagnosticsSubtitle: string
   running: string
   runDiagnostics: string
-  outputDirLabel: string
+  nodeLabel: string
   networkLabel: string
   generatedAt: string
 
@@ -286,7 +286,7 @@ const vi: Messages = {
   diagnosticsSubtitle: 'Kiểm tra yt-dlp, ffmpeg, thư mục lưu và mạng',
   running: 'Đang chạy',
   runDiagnostics: 'Chạy chẩn đoán',
-  outputDirLabel: 'Thư mục lưu',
+  nodeLabel: 'Node.js',
   networkLabel: 'Mạng',
   generatedAt: 'Thời điểm tạo',
 
@@ -478,7 +478,7 @@ const en: Messages = {
   diagnosticsSubtitle: 'Check yt-dlp, ffmpeg, output folder and network',
   running: 'Running',
   runDiagnostics: 'Run diagnostics',
-  outputDirLabel: 'Output folder',
+  nodeLabel: 'Node.js',
   networkLabel: 'Network',
   generatedAt: 'Generated at',
 

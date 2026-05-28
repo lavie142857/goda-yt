@@ -999,6 +999,19 @@ select option {
   background: var(--accent);
 }
 
+.mini-switch-label {
+  margin-left: 6px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  transition: color 0.2s var(--ease);
+}
+
+.mini-switch input:checked ~ .mini-switch-label {
+  color: var(--accent);
+}
+
 /* ============================================
    Status Bar
    ============================================ */

@@ -482,6 +482,11 @@ export class YtDlpService {
       return `node:${fromEnv}`
     }
 
+    const bundledNode = this.resolveBundledNodePath()
+    if (bundledNode) {
+      return `node:${bundledNode}`
+    }
+
     const whichCommand = process.platform === 'win32' ? 'where' : 'which'
     const probe = spawnSync(whichCommand, ['node'], {
       encoding: 'utf8',
@@ -611,6 +616,20 @@ export class YtDlpService {
     return 'yt-dlp'
   }
 
+  private resolveBundledNodePath(): string | null {
+    const cwdNode = path.join(process.cwd(), 'bin', 'node.exe')
+    if (existsSync(cwdNode)) {
+      return cwdNode
+    }
+
+    const resourcesNode = path.join(process.resourcesPath, 'bin', 'node.exe')
+    if (existsSync(resourcesNode)) {
+      return resourcesNode
+    }
+
+    return null
+  }
+
   private resolveFfmpegLocation(): string | null {
     const cwdDir = path.join(process.cwd(), 'bin')
     if (existsSync(path.join(cwdDir, 'ffmpeg.exe'))) {
@@ -627,6 +646,11 @@ export class YtDlpService {
 
   getActiveExecutablePath(): string {
     return this.resolveExecutablePath()
+  }
+
+  getNodeRuntimePath(): string | null {
+    const spec = this.resolveNodeRuntimeSpec()
+    return spec ? spec.replace(/^node:/, '') : null
   }
 
   getSettingsSnapshot(): AppSettings {

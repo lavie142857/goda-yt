@@ -70,6 +70,9 @@ export interface AppSettings {
   ytDlpAutoUpdateMode: YtDlpAutoUpdateMode
   lastYtDlpAutoUpdateAt: number | null
   language: AppLanguage
+  telemetryEnabled: boolean
+  telemetryInstallId: string
+  telemetrySent: boolean
 }
 
 export interface QueueControlState {
@@ -104,7 +107,7 @@ export interface DiagnosticsReport {
   generatedAt: number
   ytDlp: DiagnosticsCheck & { version: string | null }
   ffmpeg: DiagnosticsCheck
-  outputDir: DiagnosticsCheck
+  node: DiagnosticsCheck
   network: DiagnosticsCheck
 }
 

@@ -3,11 +3,11 @@ import { autoUpdater } from 'electron-updater'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import { get as httpsGet } from 'node:https'
 import path from 'node:path'
 import { DownloadManager } from './services/download-manager.js'
 import { SettingsStore } from './services/settings-store.js'
+import { sendInstallTelemetry } from './services/telemetry.js'
 import { YtDlpService } from './services/yt-dlp-service.js'
 import { VideoInfoService } from './services/video-info-service.js'
 import type {
@@ -224,18 +224,18 @@ function checkFfmpegAvailability(): DiagnosticsCheck {
   }
 }
 
-async function checkOutputDirectoryWritable(outputDir: string): Promise<DiagnosticsCheck> {
-  try {
-    await mkdir(outputDir, { recursive: true })
-    const probePath = path.join(outputDir, `.goda-write-test-${Date.now()}.tmp`)
-    await writeFile(probePath, 'goda-yt-write-check', { encoding: 'utf8' })
-    await unlink(probePath)
-    return { ok: true, message: `Co quyen ghi: ${outputDir}` }
-  } catch (error) {
+function checkNodeRuntime(): DiagnosticsCheck {
+  const nodePath = ytDlpService.getNodeRuntimePath()
+  if (!nodePath) {
     return {
       ok: false,
-      message: `Khong ghi duoc output dir: ${toErrorMessage(error)}`,
+      message: 'Khong tim thay Node.js (can cho YouTube).',
     }
+  }
+
+  return {
+    ok: true,
+    message: `Node.js san sang (${nodePath})`,
   }
 }
 
@@ -264,10 +264,9 @@ async function checkNetworkConnectivity(): Promise<DiagnosticsCheck> {
 }
 
 async function runDiagnostics(): Promise<DiagnosticsReport> {
-  const settings = settingsStore.get()
   const ytProbe = await ytDlpService.probe()
   const ffmpeg = checkFfmpegAvailability()
-  const outputDir = await checkOutputDirectoryWritable(settings.outputDir)
+  const node = checkNodeRuntime()
   const network = await checkNetworkConnectivity()
 
   const report: DiagnosticsReport = {
@@ -280,11 +279,11 @@ async function runDiagnostics(): Promise<DiagnosticsReport> {
       version: ytProbe.version,
     },
     ffmpeg,
-    outputDir,
+    node,
     network,
   }
 
-  if ([report.ytDlp.ok, report.ffmpeg.ok, report.outputDir.ok, report.network.ok].every(Boolean)) {
+  if ([report.ytDlp.ok, report.ffmpeg.ok, report.node.ok, report.network.ok].every(Boolean)) {
     pushNotification({
       level: 'success',
       source: 'diagnostics',
@@ -557,6 +556,14 @@ app.whenReady().then(() => {
   createWindow()
   void runScheduledAutoUpdate()
   setupAppAutoUpdate()
+
+  const telemetrySettings = settingsStore.get()
+  if (!telemetrySettings.telemetrySent) {
+    const dispatched = sendInstallTelemetry(telemetrySettings)
+    if (dispatched) {
+      settingsStore.update({ telemetrySent: true })
+    }
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

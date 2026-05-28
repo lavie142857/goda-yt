@@ -1115,7 +1115,7 @@ function App() {
     try {
       const report = await window.electronAPI.runDiagnostics()
       setDiagnostics(report)
-      const allGood = [report.ytDlp.ok, report.ffmpeg.ok, report.outputDir.ok, report.network.ok]
+      const allGood = [report.ytDlp.ok, report.ffmpeg.ok, report.node.ok, report.network.ok]
         .every(Boolean)
 
       setNotice({
@@ -1472,6 +1472,7 @@ function App() {
                   <label className="mini-switch" title={t.toMp3Title}>
                     <input type="checkbox" checked={audioOnly} onChange={() => toggleVideoMp3(video.id)} />
                     <span />
+                    <small className="mini-switch-label">{t.mp3}</small>
                   </label>
                   <button
                     className={`round-action ${renamingIds.has(video.id) || video.fileNameOverride.trim() ? 'active' : ''}`}
@@ -1800,9 +1801,9 @@ function App() {
                       <span>ffmpeg</span>
                       <small>{diagnostics.ffmpeg.message}</small>
                     </li>
-                    <li className={diagnostics.outputDir.ok ? 'state-ready' : 'state-error'}>
-                      <span>{t.outputDirLabel}</span>
-                      <small>{diagnostics.outputDir.message}</small>
+                    <li className={diagnostics.node.ok ? 'state-ready' : 'state-error'}>
+                      <span>{t.nodeLabel}</span>
+                      <small>{diagnostics.node.message}</small>
                     </li>
                     <li className={diagnostics.network.ok ? 'state-ready' : 'state-error'}>
                       <span>{t.networkLabel}</span>

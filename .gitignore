@@ -30,3 +30,4 @@ release/
 bin/ffmpeg.exe
 bin/ffprobe.exe
 bin/yt-dlp.exe
+bin/node.exe
