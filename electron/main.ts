@@ -358,7 +358,7 @@ function createWindow(): void {
     return
   }
 
-  mainWindow.loadFile(path.join(process.cwd(), 'dist', 'index.html'))
+  mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   mainWindow.show()
 }
 
