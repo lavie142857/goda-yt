@@ -30,7 +30,7 @@ jobs:
       - name: Package app (portable)
         run: npx electron-builder --win portable --publish always
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_ENV: production
 
       - name: Upload artifact
