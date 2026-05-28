@@ -25,13 +25,19 @@
   ],
   "win": {
     "icon": "public/icon.ico",
-    "forceCodeSigning": false,
     "target": [
       {
-        "target": "portable",
+        "target": "nsis",
         "arch": ["x64"]
       }
     ]
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "FLASH MEDIA"
   }
 }
 
