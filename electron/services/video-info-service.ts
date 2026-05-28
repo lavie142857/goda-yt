@@ -52,6 +52,12 @@ function resolveYtDlpPath(): string {
   if (existsSync(localPath)) {
     return localPath
   }
+
+  const resourcesPath = path.join(process.resourcesPath, 'bin', 'yt-dlp.exe')
+  if (existsSync(resourcesPath)) {
+    return resourcesPath
+  }
+
   return 'yt-dlp'
 }
 
@@ -774,15 +780,29 @@ export class VideoInfoService {
     args.push('--js-runtimes', 'node')
   }
 
+  private resolveBundledNodePath(): string | null {
+    const cwdNode = path.join(process.cwd(), 'bin', 'node.exe')
+    if (existsSync(cwdNode)) {
+      return cwdNode
+    }
+
+    const resourcesNode = path.join(process.resourcesPath, 'bin', 'node.exe')
+    if (existsSync(resourcesNode)) {
+      return resourcesNode
+    }
+
+    return null
+  }
+
   private resolveNodeRuntimeSpec(): string | null {
     const fromEnv = process.env.YTVIBEZ_NODE_PATH?.trim()
     if (fromEnv) {
       return `node:${fromEnv}`
     }
 
-    const nodePath = process.execPath?.trim()
-    if (nodePath && nodePath.toLowerCase().endsWith('node.exe')) {
-      return `node:${nodePath}`
+    const bundledNode = this.resolveBundledNodePath()
+    if (bundledNode) {
+      return `node:${bundledNode}`
     }
 
     const pathNode = path.join(process.env.ProgramFiles ?? '', 'nodejs', 'node.exe')
