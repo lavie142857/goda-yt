@@ -193,7 +193,13 @@ export class YtDlpService {
         })
 
         const abortHandler = () => {
-          child.kill('SIGTERM')
+          if (process.platform === 'win32' && child.pid) {
+            // SIGTERM only kills the yt-dlp launcher, leaving ffmpeg/worker children
+            // running. taskkill /T terminates the whole process tree immediately.
+            spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true })
+          } else {
+            child.kill('SIGTERM')
+          }
         }
         options.signal.addEventListener('abort', abortHandler)
 

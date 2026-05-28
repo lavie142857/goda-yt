@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DragEvent } from 'react'
 import type {
+  AppLanguage,
   AppSettings,
   DiagnosticsReport,
   DownloadPreset,
@@ -16,6 +17,7 @@ import type {
   YtDlpUpdateResult,
 } from './shared/contracts'
 import { mergeImportedUrls, parseTextInput } from './lib/url-import'
+import { getMessages, type Messages } from './lib/i18n'
 import './App.css'
 
 const FORMAT_OPTIONS: Array<{ value: OutputFormat; label: string }> = [
@@ -52,14 +54,14 @@ const RECOMMENDED_BATCH_QUALITY = '__recommended__'
 
 const SMART_PROFILES: Array<{
   id: SmartProfileId
-  label: string
-  description: string
+  labelKey: 'profileBalanced' | 'profileFast' | 'profileSafe'
+  descKey: 'profileBalancedDesc' | 'profileFastDesc' | 'profileSafeDesc'
   patch: Pick<AppSettings, 'maxConcurrent' | 'maxRetries' | 'defaultFormat'>
 }> = [
   {
     id: 'balanced',
-    label: 'Cân bằng',
-    description: 'Thiết lập ổn định cho hầu hết liên kết.',
+    labelKey: 'profileBalanced',
+    descKey: 'profileBalancedDesc',
     patch: {
       maxConcurrent: 2,
       maxRetries: 2,
@@ -68,8 +70,8 @@ const SMART_PROFILES: Array<{
   },
   {
     id: 'fast',
-    label: 'Nhanh',
-    description: 'Tăng số lượt tải song song, giảm số lần thử lại.',
+    labelKey: 'profileFast',
+    descKey: 'profileFastDesc',
     patch: {
       maxConcurrent: 4,
       maxRetries: 1,
@@ -78,8 +80,8 @@ const SMART_PROFILES: Array<{
   },
   {
     id: 'safe',
-    label: 'An toàn',
-    description: 'Tải chậm hơn, thử lại kỹ hơn khi mạng không ổn định.',
+    labelKey: 'profileSafe',
+    descKey: 'profileSafeDesc',
     patch: {
       maxConcurrent: 1,
       maxRetries: 4,
@@ -102,12 +104,12 @@ function formatDuration(seconds: number | null): string {
   return `${mins}:${String(secs).padStart(2, '0')}`
 }
 
-function platformLabel(platform: VideoMetadata['platform']): string {
+function platformLabel(platform: VideoMetadata['platform'], t: Messages): string {
   if (platform === 'youtube') return 'YouTube'
   if (platform === 'tiktok') return 'TikTok'
   if (platform === 'facebook') return 'Facebook'
   if (platform === 'instagram') return 'Instagram'
-  return 'Không rõ'
+  return t.platformUnknown
 }
 
 function platformIcon(platform: VideoMetadata['platform']): string {
@@ -126,97 +128,97 @@ function platformColorClass(platform: VideoMetadata['platform']): string {
   return ''
 }
 
-function queueTitle(task: DownloadTask): string {
-  return task.request.title?.trim() || platformLabel(task.platform)
+function queueTitle(task: DownloadTask, t: Messages): string {
+  return task.request.title?.trim() || platformLabel(task.platform, t)
 }
 
-function formatQueueError(error: string): string {
+function formatQueueError(error: string, t: Messages): string {
   const cleaned = error
     .replace(/^ERROR:\s*/i, '')
     .replace(/^\[[^\]]+\]\s*/i, '')
     .trim()
 
   if (/requested format is not available/i.test(cleaned)) {
-    return 'Chất lượng đã chọn không khả dụng.'
+    return t.errQualityUnavailable
   }
   if (/empty media response/i.test(cleaned)) {
-    return 'Instagram không trả về dữ liệu media công khai.'
+    return t.errInstagramNoMedia
   }
   if (/video unavailable|this video is unavailable/i.test(cleaned)) {
-    return 'Video không khả dụng (đã xóa hoặc bị giới hạn).'
+    return t.errVideoUnavailable
   }
   if (/private video|sign in if you'?ve been granted/i.test(cleaned)) {
-    return 'Video ở chế độ riêng tư.'
+    return t.errPrivateVideo
   }
   if (/members[- ]only|join this channel/i.test(cleaned)) {
-    return 'Video chỉ dành cho thành viên kênh.'
+    return t.errMembersOnly
   }
   if (/sign in to confirm your age|age[- ]restricted|inappropriate for some/i.test(cleaned)) {
-    return 'Video bị giới hạn độ tuổi — cần đăng nhập.'
+    return t.errAgeRestricted
   }
   if (/this live event will begin|live stream recordings are not available/i.test(cleaned)) {
-    return 'Livestream chưa bắt đầu hoặc chưa lưu lại.'
+    return t.errLiveNotStarted
   }
   if (/premiere will begin/i.test(cleaned)) {
-    return 'Video premiere chưa phát.'
+    return t.errPremiere
   }
   if (/HTTP Error 429|too many requests/i.test(cleaned)) {
-    return 'Bị giới hạn truy cập (429) — thử lại sau ít phút.'
+    return t.err429
   }
   if (/HTTP Error 403|forbidden/i.test(cleaned)) {
-    return 'Bị từ chối (403) — cần đăng nhập hoặc cookies.'
+    return t.err403
   }
   if (/HTTP Error 404|not found/i.test(cleaned)) {
-    return 'URL không tồn tại (404).'
+    return t.err404
   }
   if (/(geo|country).{0,20}(restrict|block|not available)/i.test(cleaned)) {
-    return 'Bị chặn theo vùng địa lý.'
+    return t.errGeo
   }
   if (/copyright|removed by the uploader/i.test(cleaned)) {
-    return 'Video đã bị gỡ (bản quyền hoặc do người đăng).'
+    return t.errCopyright
   }
   if (/unable to download webpage|getaddrinfo|ENOTFOUND|ECONNRESET|ECONNREFUSED|network is unreachable|timed? ?out/i.test(cleaned)) {
-    return 'Lỗi mạng — kiểm tra kết nối Internet.'
+    return t.errNetwork
   }
   if (/no video formats found|unable to extract|unsupported url/i.test(cleaned)) {
-    return 'Không trích xuất được video từ URL này.'
+    return t.errExtract
   }
   if (/ffmpeg/i.test(cleaned) && /not found|missing|no such file/i.test(cleaned)) {
-    return 'Thiếu ffmpeg — cài đặt và thêm vào PATH.'
+    return t.errFfmpegMissing
   }
   if (/disk full|no space left/i.test(cleaned)) {
-    return 'Hết dung lượng ổ đĩa.'
+    return t.errDiskFull
   }
   if (/permission denied|access is denied|EACCES/i.test(cleaned)) {
-    return 'Không có quyền ghi vào thư mục lưu.'
+    return t.errPermission
   }
   if (/playlist|members.*only/i.test(cleaned) && /no entries/i.test(cleaned)) {
-    return 'Playlist rỗng hoặc không truy cập được.'
+    return t.errPlaylistEmpty
   }
   if (/requires login|login or .*cookies|cookies are required|not returning public media|account is private/i.test(cleaned)) {
-    return 'Nội dung này cần đăng nhập hoặc cookies (app chỉ hỗ trợ nội dung công khai).'
+    return t.errRequiresLogin
   }
   if (/not available in public-only mode/i.test(cleaned)) {
-    return 'Nội dung không khả dụng ở chế độ công khai (riêng tư, đã xóa hoặc bị giới hạn).'
+    return t.errPublicOnly
   }
   if (/did not expose the requested quality|safer fallback/i.test(cleaned)) {
-    return 'Chất lượng/định dạng yêu cầu không có. Hãy thử MP4 với chất lượng Auto.'
+    return t.errQualityFallback
   }
   if (/javascript runtime|node\.?js/i.test(cleaned)) {
-    return 'Thiếu môi trường JavaScript (Node.js) mà yt-dlp cần.'
+    return t.errNoJsRuntime
   }
   if (/ssl|certificate|cert.*verif/i.test(cleaned)) {
-    return 'Lỗi chứng chỉ SSL — kiểm tra ngày giờ hệ thống hoặc kết nối mạng.'
+    return t.errSsl
   }
   if (/HTTP Error 5\d\d|server error|service unavailable|bad gateway/i.test(cleaned)) {
-    return 'Máy chủ nguồn đang lỗi — thử lại sau.'
+    return t.errServer5xx
   }
   if (/unsupported url|no suitable extractor|is not a valid url/i.test(cleaned)) {
-    return 'Link không được hỗ trợ hoặc không hợp lệ.'
+    return t.errUnsupportedUrl
   }
 
   // Không hiển thị mã lỗi/raw thô — đưa ra thông báo chẩn đoán gọn, dễ hiểu.
-  return 'Không tải được video. Link có thể không hợp lệ, bị giới hạn khu vực, riêng tư hoặc cần đăng nhập.'
+  return t.errGeneric
 }
 
 function summarizeImport(
@@ -224,15 +226,16 @@ function summarizeImport(
   addedCount: number,
   duplicateCount: number,
   invalidCount: number,
+  t: Messages,
 ): NoticeState {
-  const parts = [`${sourceLabel}: ${addedCount} link mới`]
+  const parts = [t.importNewLinks(sourceLabel, addedCount)]
 
   if (duplicateCount > 0) {
-    parts.push(`${duplicateCount} trùng`)
+    parts.push(t.importDuplicates(duplicateCount))
   }
 
   if (invalidCount > 0) {
-    parts.push(`${invalidCount} bỏ qua`)
+    parts.push(t.importSkipped(invalidCount))
   }
 
   return {
@@ -352,12 +355,12 @@ function collectBatchQualityLabels(videos: StagedVideo[]): string[] {
   return [...labels].sort((left, right) => parseQualityRank(right) - parseQualityRank(left))
 }
 
-function formatStatusLabel(status: DownloadStatus): string {
-  if (status === 'pending') return 'Chờ tải'
-  if (status === 'active') return 'Đang tải'
-  if (status === 'completed') return 'Hoàn tất'
-  if (status === 'failed') return 'Lỗi'
-  return 'Đã hủy'
+function formatStatusLabel(status: DownloadStatus, t: Messages): string {
+  if (status === 'pending') return t.statusPending
+  if (status === 'active') return t.statusActive
+  if (status === 'completed') return t.statusCompleted
+  if (status === 'failed') return t.statusFailed
+  return t.statusCancelled
 }
 
 function smartProfileMatchesSettings(profile: (typeof SMART_PROFILES)[number], settings: AppSettings | null): boolean {
@@ -398,9 +401,9 @@ function appendTagIfMissing(base: string, tag: string): string {
   return `${normalizedBase} [${tag}]`
 }
 
-function buildDownloadFileName(video: StagedVideo, selectedQuality: VideoQualityOption): string {
+function buildDownloadFileName(video: StagedVideo, selectedQuality: VideoQualityOption, t: Messages): string {
   const customTitle = video.fileNameOverride.trim()
-  const baseTitle = customTitle || video.title?.trim() || platformLabel(video.platform)
+  const baseTitle = customTitle || video.title?.trim() || platformLabel(video.platform, t)
   const qualityTag = isAudioOnlyPreset(video.preset)
     ? 'MP3'
     : normalizeQualityTag(selectedQuality.label)
@@ -423,9 +426,9 @@ function normalizeUrlForCompare(url: string): string {
   }
 }
 
-function formatDateTime(timestamp: number | null): string {
+function formatDateTime(timestamp: number | null, t: Messages): string {
   if (!timestamp) {
-    return 'Never'
+    return t.never
   }
 
   return new Intl.DateTimeFormat(undefined, {
@@ -479,6 +482,7 @@ function App() {
   const toggleSettingsShortcutRef = useRef<() => void>(() => undefined)
 
   const hasBridge = Boolean(window.electronAPI)
+  const t = getMessages(settings?.language)
   const isSettingsVisible = Boolean(settings?.showSettingsPanel)
   const batchTargets = selectedIds.size > 0
     ? stagedVideos.filter((video) => selectedIds.has(video.id))
@@ -489,11 +493,11 @@ function App() {
   const pendingQueueCount = queue.filter((task) => task.status === 'pending').length
   const completedQueueCount = queue.filter((task) => task.status === 'completed').length
   const queueSummaryParts: string[] = []
-  if (stagedVideos.length > 0) queueSummaryParts.push(`${stagedVideos.length} chờ`)
-  if (activeQueueCount > 0) queueSummaryParts.push(`${activeQueueCount} đang tải`)
-  if (pendingQueueCount > 0) queueSummaryParts.push(`${pendingQueueCount} xếp hàng`)
-  if (completedQueueCount > 0) queueSummaryParts.push(`${completedQueueCount} hoàn tất`)
-  const queueSummaryText = queueSummaryParts.length > 0 ? queueSummaryParts.join(' · ') : 'Chưa có mục nào'
+  if (stagedVideos.length > 0) queueSummaryParts.push(t.countWaiting(stagedVideos.length))
+  if (activeQueueCount > 0) queueSummaryParts.push(t.countDownloading(activeQueueCount))
+  if (pendingQueueCount > 0) queueSummaryParts.push(t.countQueued(pendingQueueCount))
+  if (completedQueueCount > 0) queueSummaryParts.push(t.countCompleted(completedQueueCount))
+  const queueSummaryText = queueSummaryParts.length > 0 ? queueSummaryParts.join(' · ') : t.noItems
   const allStagedSelected = stagedVideos.length > 0 && stagedVideos.every((v) => selectedIds.has(v.id))
   const someStagedSelected = selectedIds.size > 0 && !allStagedSelected
   const isEmptyState = stagedVideos.length === 0 && queue.length === 0 && !isAddingUrls
@@ -579,10 +583,10 @@ function App() {
     let seeded = false
 
     const titleForLevel = (level: SystemNotification['level']): string => {
-      if (level === 'success') return 'Hoàn tất'
-      if (level === 'error') return 'Lỗi'
-      if (level === 'warning') return 'Cảnh báo'
-      return 'Thông báo'
+      if (level === 'success') return t.levelSuccess
+      if (level === 'error') return t.levelError
+      if (level === 'warning') return t.levelWarning
+      return t.levelInfo
     }
 
     const handle = (items: SystemNotification[]): void => {
@@ -604,7 +608,7 @@ function App() {
 
     void window.electronAPI.listNotifications().then(handle)
     return window.electronAPI.onNotificationsChanged(handle)
-  }, [hasBridge, showToast])
+  }, [hasBridge, showToast, t])
 
   // Ô nhập link tự giãn cao theo số dòng (tới giới hạn CSS rồi cuộn)
   useEffect(() => {
@@ -650,7 +654,7 @@ function App() {
     await updateSettings(profile.patch)
     setNotice({
       tone: 'success',
-      message: `Đã áp dụng hồ sơ ${profile.label}.`,
+      message: t.appliedProfile(t[profile.labelKey]),
     })
   }
 
@@ -701,8 +705,8 @@ function App() {
     setNotice({
       tone: 'success',
       message: value === RECOMMENDED_BATCH_QUALITY
-        ? `Đã chọn chất lượng đề xuất cho ${targetIds.size} mục.`
-        : `Đã đặt ${value} cho ${targetIds.size} mục.`,
+        ? t.appliedRecommendedQuality(targetIds.size)
+        : t.appliedQuality(value, targetIds.size),
     })
   }
 
@@ -728,8 +732,8 @@ function App() {
     setNotice({
       tone: 'success',
       message: enabled
-        ? `Đã bật MP3 cho ${targetIds.size} mục.`
-        : `Đã chuyển ${targetIds.size} mục về video.`,
+        ? t.enabledMp3(targetIds.size)
+        : t.switchedToVideo(targetIds.size),
     })
   }
 
@@ -801,14 +805,14 @@ function App() {
     const totalInvalid = invalidCount + mergeResult.invalidCount
 
     if (mergeResult.addedUrls.length === 0) {
-      setNotice(summarizeImport(sourceLabel, 0, mergeResult.duplicateCount, totalInvalid))
+      setNotice(summarizeImport(sourceLabel, 0, mergeResult.duplicateCount, totalInvalid, t))
       return
     }
 
     setIsAddingUrls(true)
     setNotice({
       tone: 'info',
-      message: `${sourceLabel}: đang đọc metadata cho ${mergeResult.addedUrls.length} link`,
+      message: t.readingMetadata(sourceLabel, mergeResult.addedUrls.length),
     })
 
     try {
@@ -822,12 +826,13 @@ function App() {
           mergeResult.addedUrls.length,
           mergeResult.duplicateCount,
           totalInvalid,
+          t,
         ),
       )
     } catch (error) {
       setNotice({
         tone: 'error',
-        message: `Đọc metadata thất bại: ${formatQueueError(error instanceof Error ? error.message : String(error))}`,
+        message: t.metadataFailed(formatQueueError(error instanceof Error ? error.message : String(error), t)),
       })
     } finally {
       setIsAddingUrls(false)
@@ -839,12 +844,12 @@ function App() {
     if (parsed.urls.length === 0) {
       setNotice({
         tone: 'error',
-        message: 'Dán ít nhất một URL được hỗ trợ.',
+        message: t.pasteAtLeastOne,
       })
       return
     }
 
-    await addUrls(parsed.urls, parsed.invalidCount, 'Dán')
+    await addUrls(parsed.urls, parsed.invalidCount, t.sourcePaste)
     setUrlInput('')
   }
 
@@ -855,17 +860,17 @@ function App() {
     try {
       clipboardText = await window.electronAPI.readClipboard()
     } catch {
-      setNotice({ tone: 'error', message: 'Không đọc được clipboard.' })
+      setNotice({ tone: 'error', message: t.clipboardReadFailed })
       return
     }
 
     const parsed = parseTextInput(clipboardText)
     if (parsed.urls.length === 0) {
-      setNotice({ tone: 'error', message: 'Clipboard không có link được hỗ trợ.' })
+      setNotice({ tone: 'error', message: t.clipboardNoLinks })
       return
     }
 
-    await addUrls(parsed.urls, parsed.invalidCount, 'Clipboard')
+    await addUrls(parsed.urls, parsed.invalidCount, t.sourceClipboard)
   }
 
   function updateVideo(id: string, updates: Partial<StagedVideo>): void {
@@ -949,7 +954,7 @@ function App() {
     if (duplicateCount > 0) {
       setNotice({
         tone: queueable.length > 0 ? 'info' : 'error',
-        message: `Bỏ qua ${duplicateCount} link trùng đã có trong hàng đợi hoặc lịch sử.`,
+        message: t.skippedDuplicates(duplicateCount),
       })
     }
 
@@ -962,7 +967,7 @@ function App() {
         downloads: queueable.map((video) => {
           const selectedQuality = getSelectedQuality(video)
           const audioOnly = isAudioOnlyPreset(video.preset)
-          const fileName = buildDownloadFileName(video, selectedQuality)
+          const fileName = buildDownloadFileName(video, selectedQuality, t)
 
           return {
             url: video.url,
@@ -985,15 +990,15 @@ function App() {
       setSelectedIds(new Set())
 
       if (result.accepted.length === 0) {
-        showToast('error', 'Không thể tải', 'Chưa có mục nào được đưa vào hàng đợi.')
+        showToast('error', t.cannotDownload, t.noItemsQueued)
         return
       }
 
-      const rejectedSuffix = result.rejected.length > 0 ? ` · ${result.rejected.length} bị từ chối` : ''
-      showToast('success', 'Đã thêm vào hàng đợi', `${result.accepted.length} mục đã được thêm${rejectedSuffix}`)
+      const rejectedSuffix = result.rejected.length > 0 ? t.rejectedSuffix(result.rejected.length) : ''
+      showToast('success', t.addedToQueue, t.addedItems(result.accepted.length, rejectedSuffix))
     } catch (error) {
-      const errorMsg = `Không thể thêm vào hàng đợi: ${formatQueueError(error instanceof Error ? error.message : String(error))}`
-      showToast('error', 'Lỗi tải xuống', errorMsg)
+      const errorMsg = t.cannotAddToQueue(formatQueueError(error instanceof Error ? error.message : String(error), t))
+      showToast('error', t.downloadError, errorMsg)
     }
   }
 
@@ -1013,7 +1018,7 @@ function App() {
     if (!opened) {
       setNotice({
         tone: 'error',
-        message: 'Không thể mở thư mục lưu. Hãy kiểm tra lại file hoặc thư mục đầu ra.',
+        message: t.cannotOpenFolder,
       })
     }
   }
@@ -1026,7 +1031,7 @@ function App() {
       setSettings(updated)
       setNotice({
         tone: 'success',
-        message: 'Đã cập nhật thư mục lưu.',
+        message: t.outputDirUpdated,
       })
     }
   }
@@ -1046,7 +1051,7 @@ function App() {
     } catch (error) {
       setNotice({
         tone: 'error',
-        message: `Cập nhật yt-dlp thất bại: ${formatQueueError(error instanceof Error ? error.message : String(error))}`,
+        message: t.updateYtDlpFailed(formatQueueError(error instanceof Error ? error.message : String(error), t)),
       })
     } finally {
       setIsUpdatingYtDlp(false)
@@ -1065,7 +1070,7 @@ function App() {
     setQueueControl(nextState)
     setNotice({
       tone: 'info',
-      message: nextState.paused ? 'Đã tạm dừng hàng đợi.' : 'Đã tiếp tục hàng đợi.',
+      message: nextState.paused ? t.queuePaused : t.queueResumed,
     })
   }
 
@@ -1096,7 +1101,7 @@ function App() {
     if (!ok) {
       setNotice({
         tone: 'error',
-        message: 'Chưa thể sắp xếp lại mục này.',
+        message: t.cannotReorder,
       })
     }
   }
@@ -1115,12 +1120,12 @@ function App() {
 
       setNotice({
         tone: allGood ? 'success' : 'info',
-        message: allGood ? 'Chẩn đoán không phát hiện lỗi.' : 'Chẩn đoán phát hiện vấn đề cần kiểm tra.',
+        message: allGood ? t.diagnosticsNoIssues : t.diagnosticsFoundIssues,
       })
     } catch (error) {
       setNotice({
         tone: 'error',
-        message: `Chẩn đoán thất bại: ${formatQueueError(error instanceof Error ? error.message : String(error))}`,
+        message: t.diagnosticsFailed(formatQueueError(error instanceof Error ? error.message : String(error), t)),
       })
     } finally {
       setIsRunningDiagnostics(false)
@@ -1174,7 +1179,7 @@ function App() {
     if (!ok) {
       setNotice({
         tone: 'error',
-        message: 'Chưa thể di chuyển lượt tải này.',
+        message: t.cannotMove,
       })
     }
   }
@@ -1184,12 +1189,15 @@ function App() {
       <div className={`app-window ${isEmptyState ? 'is-empty' : ''}`}>
         <header className="window-titlebar">
           <div className="window-title">
-            <strong className="brand-name">
-              <span className="brand-goda">FLASH</span>
-              <span className="brand-yt">MEDIA</span>
-            </strong>
+            <span className="brand-stack">
+              <strong className="brand-name">
+                <span className="brand-goda">FLASH</span>
+                <span className="brand-yt">MEDIA</span>
+              </strong>
+              <span className="brand-version">v{__APP_VERSION__}</span>
+            </span>
             <span className="brand-divider" aria-hidden="true" />
-            <span className="brand-tagline">Trình tải video chất lượng cao</span>
+            <span className="brand-tagline">{t.tagline}</span>
           </div>
           <div className="titlebar-right">
             <div className="titlebar-actions">
@@ -1198,7 +1206,7 @@ function App() {
               type="button"
               onClick={() => void toggleSettingsPanel()}
               disabled={!settings}
-              title="Mở cài đặt (Ctrl+,)"
+              title={t.openSettings}
               style={{ minHeight: '32px', padding: '0 12px', fontSize: '1.1rem' }}
             >
               <span className="animated-icon">⚙</span>
@@ -1207,7 +1215,7 @@ function App() {
               className="toolbar-button"
               type="button"
               onClick={toggleKeyboardShortcuts}
-              title="Phím tắt (?)"
+              title={t.shortcutsTitle}
               style={{ minHeight: '32px', padding: '0 12px', fontSize: '1rem', fontWeight: 700 }}
             >
               ?
@@ -1216,7 +1224,7 @@ function App() {
               className="toolbar-button"
               type="button"
               onClick={toggleTheme}
-              title={theme === 'light' ? 'Chuyển sang chế độ tối' : 'Chuyển sang chế độ sáng'}
+              title={theme === 'light' ? t.switchToDark : t.switchToLight}
               style={{ minHeight: '32px', padding: '0 12px', fontSize: '1.1rem' }}
             >
               {theme === 'light' ? '🌙' : '☀️'}
@@ -1228,22 +1236,22 @@ function App() {
                   className="win-control"
                   type="button"
                   onClick={() => void window.electronAPI.windowMinimize()}
-                  title="Thu nhỏ"
-                  aria-label="Thu nhỏ"
+                  title={t.minimize}
+                  aria-label={t.minimize}
                 >─</button>
                 <button
                   className="win-control"
                   type="button"
                   onClick={() => void window.electronAPI.windowMaximizeToggle()}
-                  title={isMaximized ? 'Khôi phục' : 'Phóng to'}
-                  aria-label={isMaximized ? 'Khôi phục' : 'Phóng to'}
+                  title={isMaximized ? t.restore : t.maximize}
+                  aria-label={isMaximized ? t.restore : t.maximize}
                 >{isMaximized ? '❐' : '□'}</button>
                 <button
                   className="win-control win-control-close"
                   type="button"
                   onClick={() => void window.electronAPI.windowClose()}
-                  title="Đóng"
-                  aria-label="Đóng"
+                  title={t.close}
+                  aria-label={t.close}
                 >✕</button>
               </div>
             )}
@@ -1256,31 +1264,31 @@ function App() {
             type="button"
             onClick={() => void handleClipboardPaste()}
             disabled={isAddingUrls}
-            title="Đọc link trực tiếp từ clipboard"
+            title={t.pasteFromClipboardTitle}
           >
-            <span className={isAddingUrls ? 'spinning-icon' : ''}>📋</span> Dán từ clipboard
+            <span className={isAddingUrls ? 'spinning-icon' : ''}>📋</span> {t.pasteFromClipboard}
           </button>
           <button
             className={`toolbar-button ${showManualInput ? 'active' : ''}`}
             type="button"
             onClick={() => setShowManualInput((open) => !open)}
-            title="Hiện/ẩn ô nhập link thủ công"
+            title={t.toggleManualInputTitle}
           >
-            ✎ Nhập tay
+            ✎ {t.manualInput}
           </button>
           {stagedVideos.length > 0 && (
-            <label className="select-all-control" title={allStagedSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}>
+            <label className="select-all-control" title={allStagedSelected ? t.deselectAll : t.selectAll}>
               <input
                 type="checkbox"
                 checked={allStagedSelected}
                 ref={(el) => { if (el) el.indeterminate = someStagedSelected }}
                 onChange={toggleSelectAll}
               />
-              <span className="select-all-label">Tất cả</span>
+              <span className="select-all-label">{t.all}</span>
             </label>
           )}
           {batchTargetCount > 0 && (
-            <div className="batch-controls" aria-label="Thiết lập hàng loạt">
+            <div className="batch-controls" aria-label={t.batchSettings}>
               <select
                 value=""
                 onChange={(event) => {
@@ -1288,30 +1296,30 @@ function App() {
                   applyBatchQuality(event.target.value)
                   event.currentTarget.value = ''
                 }}
-                title={selectedIds.size > 0 ? 'Áp dụng cho mục đã chọn' : 'Áp dụng cho toàn bộ mục chờ'}
+                title={selectedIds.size > 0 ? t.applyToSelected : t.applyToAllPending}
               >
-                <option value="">Chất lượng</option>
-                <option value={RECOMMENDED_BATCH_QUALITY}>Đề xuất</option>
+                <option value="">{t.quality}</option>
+                <option value={RECOMMENDED_BATCH_QUALITY}>{t.recommended}</option>
                 {batchQualityLabels.map((label) => (
                   <option key={label} value={label}>{label}</option>
                 ))}
               </select>
-              <button className="batch-button" type="button" onClick={() => applyBatchMp3(true)} title="Chuyển tất cả sang MP3">
-                🎵 MP3
+              <button className="batch-button" type="button" onClick={() => applyBatchMp3(true)} title={t.allToMp3}>
+                🎵 {t.mp3}
               </button>
-              <button className="batch-button" type="button" onClick={() => applyBatchMp3(false)} title="Chuyển tất cả sang Video">
-                🎬 Video
+              <button className="batch-button" type="button" onClick={() => applyBatchMp3(false)} title={t.allToVideo}>
+                🎬 {t.video}
               </button>
             </div>
           )}
           <div className="toolbar-right">
             <label className="format-control">
-              <span>Format</span>
+              <span>{t.format}</span>
               <select
                 value={settings?.defaultFormat ?? 'mp4'}
                 onChange={(event) => void updateSettings({ defaultFormat: event.target.value as OutputFormat })}
                 disabled={!settings}
-                title="Định dạng video mặc định"
+                title={t.defaultVideoFormat}
               >
                 {FORMAT_OPTIONS.map((format) => (
                   <option key={format.value} value={format.value}>{format.label}</option>
@@ -1323,7 +1331,7 @@ function App() {
               type="button"
               onClick={() => void toggleQueuePause()}
               disabled={queue.length === 0}
-              title={queueControl.paused ? 'Tiếp tục tải (Resume)' : 'Tạm dừng tải (Pause)'}
+              title={queueControl.paused ? t.resumeTitle : t.pauseTitle}
             >
               {queueControl.paused ? '▶' : '⏸'}
             </button>
@@ -1332,9 +1340,9 @@ function App() {
               type="button"
               onClick={() => void startDownload()}
               disabled={stagedVideos.length === 0}
-              title="Bắt đầu tải xuống (Ctrl+Shift+Enter)"
+              title={t.startDownloadTitle}
             >
-              <span className={activeQueueCount > 0 ? 'bouncing-icon' : ''}>↓</span> Tải xuống
+              <span className={activeQueueCount > 0 ? 'bouncing-icon' : ''}>↓</span> {t.download}
             </button>
           </div>
         </section>
@@ -1346,7 +1354,7 @@ function App() {
               className="desktop-url-input"
               value={urlInput}
               onChange={(event) => setUrlInput(event.target.value)}
-              placeholder="Dán hoặc nhập link tại đây, mỗi link một dòng..."
+              placeholder={t.urlPlaceholder}
               autoFocus
             />
             <div className="link-entry-actions">
@@ -1355,23 +1363,23 @@ function App() {
                 type="button"
                 onClick={() => void handlePasteAdd()}
                 disabled={isAddingUrls || !urlInput.trim()}
-                title="Thêm link đã nhập vào danh sách (Ctrl+Enter)"
+                title={t.addToListTitle}
               >
-                <span className={isAddingUrls ? 'spinning-icon' : ''}>＋</span> Thêm vào danh sách
+                <span className={isAddingUrls ? 'spinning-icon' : ''}>＋</span> {t.addToList}
               </button>
             </div>
           </section>
         )}
 
-        <section className="downloader-list" aria-label="Danh sách tải">
+        <section className="downloader-list" aria-label={t.downloadListAria}>
           {stagedVideos.length === 0 && queue.length === 0 && !isAddingUrls ? (
             <div className="desktop-empty">
               <div className="empty-hero">
                 <div className="empty-logo">
                   <img src="./icon.png" alt="FLASH MEDIA" />
                 </div>
-                <h2 className="empty-title">Sẵn sàng tải video</h2>
-                <p className="empty-subtitle">Dán link YouTube, TikTok, Facebook hoặc Instagram để bắt đầu</p>
+                <h2 className="empty-title">{t.readyToDownload}</h2>
+                <p className="empty-subtitle">{t.emptySubtitle}</p>
               </div>
             </div>
           ) : null}
@@ -1418,30 +1426,30 @@ function App() {
                   <span className={`platform-badge ${platformColorClass(video.platform)}`}>{platformIcon(video.platform)}</span>
                 </div>
                 <div className="row-content">
-                  <div className="row-title">{video.title || platformLabel(video.platform)}</div>
+                  <div className="row-title">{video.title || platformLabel(video.platform, t)}</div>
                   {video.error && (
                     <div className="video-status-badge error-badge" title={video.error.message}>
-                      ⚠ {video.error.category === 'permanent' ? 'Lỗi' : 'Tạm lỗi'}: {formatQueueError(video.error.message)}
+                      ⚠ {video.error.category === 'permanent' ? t.errorLabel : t.tempErrorLabel}: {formatQueueError(video.error.message, t)}
                     </div>
                   )}
                   {!video.error && video.warning && (
                     <div className="video-status-badge warning-badge" title={video.warning.message}>
-                      ⚠ {formatQueueError(video.warning.message)}
+                      ⚠ {formatQueueError(video.warning.message, t)}
                     </div>
                   )}
                   {!video.error && !video.warning && video.probeLimited && (
                     <div className="video-status-badge info-badge">
-                      Dữ liệu giới hạn
+                      {t.limitedData}
                     </div>
                   )}
                   {renamingIds.has(video.id) && (
                     <input
                       type="text"
                       className="filename-edit"
-                      placeholder="Chỉnh sửa tên file..."
+                      placeholder={t.editFileNamePlaceholder}
                       value={video.fileNameOverride}
                       onChange={(e) => updateVideo(video.id, { fileNameOverride: e.target.value })}
-                      title="Tên file khi tải"
+                      title={t.fileNameTitle}
                       autoFocus
                     />
                   )}
@@ -1461,18 +1469,18 @@ function App() {
                   )}
                 </div>
                 <div className="row-actions compact-actions">
-                  <label className="mini-switch" title="Chuyển sang MP3">
+                  <label className="mini-switch" title={t.toMp3Title}>
                     <input type="checkbox" checked={audioOnly} onChange={() => toggleVideoMp3(video.id)} />
                     <span />
                   </label>
                   <button
                     className={`round-action ${renamingIds.has(video.id) || video.fileNameOverride.trim() ? 'active' : ''}`}
                     type="button"
-                    title="Đổi tên file"
+                    title={t.renameFileTitle}
                     onClick={() => toggleRename(video.id)}
                   >✎</button>
-                  <button className="round-action" type="button" title="Tải ngay" onClick={() => void startDownload(new Set([video.id]))}>↓</button>
-                  <button className="round-action danger-action" type="button" title="Xóa khỏi danh sách" onClick={() => removeVideo(video.id)}>×</button>
+                  <button className="round-action" type="button" title={t.downloadNowTitle} onClick={() => void startDownload(new Set([video.id]))}>↓</button>
+                  <button className="round-action danger-action" type="button" title={t.removeFromListTitle} onClick={() => removeVideo(video.id)}>×</button>
                 </div>
               </article>
             )
@@ -1515,13 +1523,13 @@ function App() {
                     <span className={`platform-badge ${platformColorClass(task.platform)}`}>{platformIcon(task.platform)}</span>
                   </div>
                   <div className="row-content">
-                    <div className="row-title">{queueTitle(task)}</div>
+                    <div className="row-title">{queueTitle(task, t)}</div>
                     <div className="row-subline">
-                      <span className={`platform-tag ${platformColorClass(task.platform)}`}>{platformLabel(task.platform)}</span>
-                      <span>{formatStatusLabel(task.status)}</span>
+                      <span className={`platform-tag ${platformColorClass(task.platform)}`}>{platformLabel(task.platform, t)}</span>
+                      <span>{formatStatusLabel(task.status, t)}</span>
                       {task.status === 'active' && <span className="speed-tag">{task.progress.speed}</span>}
                       {task.status === 'active' && <span>ETA {task.progress.eta}</span>}
-                      {task.error && <span className="row-error">{formatQueueError(task.error)}</span>}
+                      {task.error && <span className="row-error">{formatQueueError(task.error, t)}</span>}
                     </div>
                     {!isTerminalStatus(task.status) && (
                       <div className={`desktop-progress ${task.status === 'active' ? 'progress-animated' : ''}`} aria-hidden="true">
@@ -1532,15 +1540,15 @@ function App() {
                   <div className="row-actions compact-actions">
                     {!isTerminalStatus(task.status) && (
                       <>
-                        <button className="round-action" type="button" onClick={() => void moveQueueTask(task.id, 'up')} disabled={!canMoveUp} title="Di chuyển lên">↑</button>
-                        <button className="round-action" type="button" onClick={() => void moveQueueTask(task.id, 'down')} disabled={!canMoveDown} title="Di chuyển xuống">↓</button>
+                        <button className="round-action" type="button" onClick={() => void moveQueueTask(task.id, 'up')} disabled={!canMoveUp} title={t.moveUp}>↑</button>
+                        <button className="round-action" type="button" onClick={() => void moveQueueTask(task.id, 'down')} disabled={!canMoveDown} title={t.moveDown}>↓</button>
                       </>
                     )}
                     {(task.status === 'active' || task.status === 'pending') && (
-                      <button className="round-action danger-action" type="button" onClick={() => void onCancelDownload(task.id)} title="Hủy">×</button>
+                      <button className="round-action danger-action" type="button" onClick={() => void onCancelDownload(task.id)} title={t.cancel}>×</button>
                     )}
                     {(task.status === 'completed' || Boolean(task.outputFile)) && (
-                      <button className="row-open-button" type="button" onClick={() => void onOpenDownloadFolder(task.id)}>📂 Mở</button>
+                      <button className="row-open-button" type="button" onClick={() => void onOpenDownloadFolder(task.id)}>📂 {t.open}</button>
                     )}
                   </div>
                 </article>
@@ -1553,7 +1561,7 @@ function App() {
                   <div className="queue-group">
                     <div className="queue-group-header">
                       <span className="queue-group-icon active-pulse">↓</span>
-                      <span>Đang tải ({activeItems.length})</span>
+                      <span>{t.downloadingGroup(activeItems.length)}</span>
                     </div>
                     {activeItems.map(renderQueueItem)}
                   </div>
@@ -1562,7 +1570,7 @@ function App() {
                   <div className="queue-group">
                     <div className="queue-group-header">
                       <span className="queue-group-icon">⏳</span>
-                      <span>Chờ ({pendingItems.length})</span>
+                      <span>{t.pendingGroup(pendingItems.length)}</span>
                     </div>
                     {pendingItems.map(renderQueueItem)}
                   </div>
@@ -1571,14 +1579,14 @@ function App() {
                   <div className="queue-group">
                     <div className="queue-group-header">
                       <span className="queue-group-icon">✓</span>
-                      <span>Hoàn tất ({terminalItems.length})</span>
+                      <span>{t.completedGroup(terminalItems.length)}</span>
                       <button
                         className="queue-group-clear"
                         type="button"
                         onClick={() => void onClearCompleted()}
-                        title="Xóa các mục đã hoàn tất khỏi danh sách"
+                        title={t.clearCompletedTitle}
                       >
-                        🗑 Xóa
+                        🗑 {t.clear}
                       </button>
                     </div>
                     {terminalItems.map(renderQueueItem)}
@@ -1600,7 +1608,7 @@ function App() {
                 <span>{Math.round(queue.filter(t => t.status === 'active').reduce((sum, t) => sum + t.progress.percent, 0) / Math.max(1, activeQueueCount))}%</span>
               </span>
             )}
-            <span>{queueControl.paused ? '⏸ Tạm dừng' : activeQueueCount > 0 ? '↓ Đang tải' : '● Sẵn sàng'}</span>
+            <span>{queueControl.paused ? t.paused : activeQueueCount > 0 ? t.downloadingStatus : t.ready}</span>
           </div>
         </footer>
 
@@ -1611,16 +1619,16 @@ function App() {
               id="settings-panel"
               role="dialog"
               aria-modal="true"
-              aria-label="Cài đặt"
+              aria-label={t.settings}
               onClick={(event) => event.stopPropagation()}
             >
               <div className="settings-modal-head">
                 <div className="section-header-copy">
-                  <h2>Cài đặt</h2>
-                  <span>Điều khiển tải, yt-dlp và chẩn đoán</span>
+                  <h2>{t.settings}</h2>
+                  <span>{t.settingsSubtitle}</span>
                 </div>
                 <button className="ghost-button" type="button" onClick={() => void closeSettingsPanel()}>
-                  Đóng
+                  {t.close}
                 </button>
               </div>
 
@@ -1628,9 +1636,9 @@ function App() {
                 <div className="tool-pill settings-tool-pill">
                   <span>yt-dlp</span>
                   <strong className={probe?.available ? 'state-ready' : 'state-error'}>
-                    {probe?.available ? 'Sẵn sàng' : 'Ngoại tuyến'}
+                    {probe?.available ? t.ytDlpReady : t.offline}
                   </strong>
-                  <small>{probe?.version ?? 'Chưa phát hiện'}</small>
+                  <small>{probe?.version ?? t.notDetected}</small>
                 </div>
                 <button
                   className="secondary-button"
@@ -1638,7 +1646,7 @@ function App() {
                   onClick={() => void onUpdateYtDlp()}
                   disabled={isUpdatingYtDlp}
                 >
-                  {isUpdatingYtDlp ? 'Đang cập nhật' : 'Cập nhật yt-dlp'}
+                  {isUpdatingYtDlp ? t.updating : t.updateYtDlp}
                 </button>
               </div>
 
@@ -1656,11 +1664,11 @@ function App() {
                   <span className="switch-track" aria-hidden="true">
                     <span className="switch-thumb" />
                   </span>
-                  <span className="switch-text">Tự cập nhật yt-dlp</span>
+                  <span className="switch-text">{t.autoUpdateYtDlp}</span>
                 </label>
 
                 <label className="field compact-field">
-                  <span>Lịch cập nhật</span>
+                  <span>{t.updateSchedule}</span>
                   <select
                     value={settings?.ytDlpAutoUpdateMode ?? 'weekly'}
                     onChange={(event) =>
@@ -1668,12 +1676,12 @@ function App() {
                     }
                     disabled={!settings || !settings.autoUpdateYtDlp}
                   >
-                    <option value="weekly">Hàng tuần</option>
-                    <option value="on-start">Khi mở app</option>
+                    <option value="weekly">{t.weekly}</option>
+                    <option value="on-start">{t.onStart}</option>
                   </select>
                 </label>
 
-                <small>{`Lần tự cập nhật gần nhất: ${formatDateTime(settings?.lastYtDlpAutoUpdateAt ?? null)}`}</small>
+                <small>{t.lastAutoUpdate(formatDateTime(settings?.lastYtDlpAutoUpdateAt ?? null, t))}</small>
               </div>
 
               <div className="smart-profile-grid">
@@ -1685,16 +1693,16 @@ function App() {
                     onClick={() => void applySmartProfile(profile.id)}
                     disabled={!settings}
                   >
-                    <strong>{profile.label}</strong>
-                    <span>{profile.description}</span>
-                    {smartProfileMatchesSettings(profile, settings) && <small>Đang dùng</small>}
+                    <strong>{t[profile.labelKey]}</strong>
+                    <span>{t[profile.descKey]}</span>
+                    {smartProfileMatchesSettings(profile, settings) && <small>{t.inUse}</small>}
                   </button>
                 ))}
               </div>
 
               <div className="settings-grid">
                 <label className="field">
-                  <span>Định dạng</span>
+                  <span>{t.formatLabel}</span>
                   <select
                     value={settings?.defaultFormat ?? 'mp4'}
                     onChange={(event) =>
@@ -1711,7 +1719,7 @@ function App() {
                 </label>
 
                 <label className="field">
-                  <span>Tải song song</span>
+                  <span>{t.concurrentDownloads}</span>
                   <select
                     value={settings?.maxConcurrent ?? 2}
                     onChange={(event) =>
@@ -1728,7 +1736,7 @@ function App() {
                 </label>
 
                 <label className="field">
-                  <span>Thử lại</span>
+                  <span>{t.retries}</span>
                   <select
                     value={settings?.maxRetries ?? 2}
                     onChange={(event) =>
@@ -1743,20 +1751,34 @@ function App() {
                     ))}
                   </select>
                 </label>
+
+                <label className="field">
+                  <span>{t.language}</span>
+                  <select
+                    value={settings?.language ?? 'vi'}
+                    onChange={(event) =>
+                      void updateSettings({ language: event.target.value as AppLanguage })
+                    }
+                    disabled={!settings}
+                  >
+                    <option value="vi">Tiếng Việt</option>
+                    <option value="en">English</option>
+                  </select>
+                </label>
               </div>
 
               <div className="folder-row">
-                <input type="text" value={settings?.outputDir ?? ''} readOnly title="Đường dẫn lưu (chỉ đọc — có thể bôi đen để sao chép)" />
+                <input type="text" value={settings?.outputDir ?? ''} readOnly title={t.outputDirTitle} />
                 <button className="secondary-button" type="button" onClick={() => void pickOutputDirectory()}>
-                  Chọn thư mục
+                  {t.chooseFolder}
                 </button>
               </div>
 
               <div className="diagnostics-panel">
                 <div className="diagnostics-head">
                   <div>
-                    <strong>Chẩn đoán</strong>
-                    <p>Kiểm tra yt-dlp, ffmpeg, thư mục lưu và mạng</p>
+                    <strong>{t.diagnostics}</strong>
+                    <p>{t.diagnosticsSubtitle}</p>
                   </div>
                   <button
                     className="secondary-button compact-button"
@@ -1764,7 +1786,7 @@ function App() {
                     onClick={() => void onRunDiagnostics()}
                     disabled={isRunningDiagnostics}
                   >
-                    {isRunningDiagnostics ? 'Đang chạy' : 'Chạy chẩn đoán'}
+                    {isRunningDiagnostics ? t.running : t.runDiagnostics}
                   </button>
                 </div>
 
@@ -1779,16 +1801,16 @@ function App() {
                       <small>{diagnostics.ffmpeg.message}</small>
                     </li>
                     <li className={diagnostics.outputDir.ok ? 'state-ready' : 'state-error'}>
-                      <span>Thư mục lưu</span>
+                      <span>{t.outputDirLabel}</span>
                       <small>{diagnostics.outputDir.message}</small>
                     </li>
                     <li className={diagnostics.network.ok ? 'state-ready' : 'state-error'}>
-                      <span>Mạng</span>
+                      <span>{t.networkLabel}</span>
                       <small>{diagnostics.network.message}</small>
                     </li>
                     <li>
-                      <span>Thời điểm tạo</span>
-                      <small>{formatDateTime(diagnostics.generatedAt)}</small>
+                      <span>{t.generatedAt}</span>
+                      <small>{formatDateTime(diagnostics.generatedAt, t)}</small>
                     </li>
                   </ul>
                 )}
@@ -1804,18 +1826,18 @@ function App() {
           <div className="panel settings-modal" style={{ maxWidth: '600px' }} onClick={(e) => e.stopPropagation()}>
             <div className="settings-modal-head">
               <div className="section-header-copy">
-                <h2>⌨️ Phím tắt</h2>
-                <span>Các phím tắt hữu ích để sử dụng nhanh</span>
+                <h2>{t.shortcutsModalTitle}</h2>
+                <span>{t.shortcutsSubtitle}</span>
               </div>
               <button className="ghost-button" type="button" onClick={toggleKeyboardShortcuts}>
-                Đóng
+                {t.close}
               </button>
             </div>
 
             <div style={{ display: 'grid', gap: '12px' }}>
               <div className="tool-pill">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>Thêm link</span>
+                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>{t.addLink}</span>
                   <kbd style={{ 
                     padding: '4px 8px', 
                     background: 'var(--surface-muted)', 
@@ -1829,7 +1851,7 @@ function App() {
 
               <div className="tool-pill">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>Bắt đầu tải</span>
+                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>{t.startDownloadShort}</span>
                   <kbd style={{ 
                     padding: '4px 8px', 
                     background: 'var(--surface-muted)', 
@@ -1843,7 +1865,7 @@ function App() {
 
               <div className="tool-pill">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>Mở cài đặt</span>
+                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>{t.openSettingsShort}</span>
                   <kbd style={{ 
                     padding: '4px 8px', 
                     background: 'var(--surface-muted)', 
@@ -1857,7 +1879,7 @@ function App() {
 
               <div className="tool-pill">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>Đóng modal</span>
+                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>{t.closeModal}</span>
                   <kbd style={{ 
                     padding: '4px 8px', 
                     background: 'var(--surface-muted)', 
@@ -1871,7 +1893,7 @@ function App() {
 
               <div className="tool-pill">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>Hiện phím tắt</span>
+                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>{t.showShortcuts}</span>
                   <kbd style={{ 
                     padding: '4px 8px', 
                     background: 'var(--surface-muted)', 

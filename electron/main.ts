@@ -518,12 +518,26 @@ function setupAppAutoUpdate(): void {
     })
   })
 
-  autoUpdater.on('update-downloaded', (info) => {
+  autoUpdater.on('update-downloaded', async (info) => {
     pushNotification({
       level: 'success',
       source: 'system',
-      message: `Đã tải bản ${info.version}. Khởi động lại ứng dụng để cập nhật.`,
+      message: `Đã tải bản ${info.version}. Khởi động lại để cập nhật.`,
     })
+
+    const choice = await dialog.showMessageBox({
+      type: 'info',
+      buttons: ['Khởi động lại ngay', 'Để sau'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'Cập nhật đã sẵn sàng',
+      message: `Phiên bản ${info.version} đã được tải về.`,
+      detail: 'Khởi động lại ứng dụng để hoàn tất cập nhật.',
+    })
+
+    if (choice.response === 0) {
+      autoUpdater.quitAndInstall()
+    }
   })
 
   autoUpdater.on('error', (error) => {

@@ -295,6 +295,13 @@ button {
   gap: 10px;
 }
 
+.brand-stack {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.05;
+}
+
 .brand-name {
   display: inline-flex;
   align-items: baseline;
@@ -302,6 +309,13 @@ button {
   font-size: 1.2rem;
   font-weight: 800;
   letter-spacing: -0.01em;
+}
+
+.brand-version {
+  color: var(--muted);
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
 }
 
 .brand-goda {

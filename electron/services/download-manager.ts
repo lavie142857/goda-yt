@@ -9,6 +9,8 @@ export class DownloadManager {
 
   private readonly activeControllers = new Map<string, AbortController>()
 
+  private readonly pausedTaskIds = new Set<string>()
+
   private paused = false
 
   private emitTimer: ReturnType<typeof setTimeout> | null = null
@@ -41,6 +43,14 @@ export class DownloadManager {
 
   pause(): QueueControlState {
     this.paused = true
+
+    // Stop running downloads now; they revert to pending and resume from the
+    // partial .part files when the queue is resumed.
+    for (const [id, controller] of this.activeControllers) {
+      this.pausedTaskIds.add(id)
+      controller.abort()
+    }
+
     return this.getControlState()
   }
 
@@ -251,9 +261,16 @@ export class DownloadManager {
     } catch (error) {
       const isAborted = (error as Error).message === 'DOWNLOAD_ABORTED'
       if (isAborted) {
-        task.status = 'cancelled'
-        task.progress.stage = 'da-huy'
-        task.updatedAt = Date.now()
+        if (this.pausedTaskIds.has(task.id)) {
+          this.pausedTaskIds.delete(task.id)
+          task.status = 'pending'
+          task.progress.stage = 'tam-dung'
+          task.updatedAt = Date.now()
+        } else {
+          task.status = 'cancelled'
+          task.progress.stage = 'da-huy'
+          task.updatedAt = Date.now()
+        }
       } else {
         const currentSettings = this.settingsStore.get()
         const normalizedError = error as Error

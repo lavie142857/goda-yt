@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import type { AppSettings, OutputFormat, YtDlpAutoUpdateMode } from '../types.js'
+import type { AppLanguage, AppSettings, OutputFormat, YtDlpAutoUpdateMode } from '../types.js'
 
 const SETTINGS_FILE = 'settings.json'
 
@@ -36,6 +36,7 @@ export class SettingsStore {
         payload.lastYtDlpAutoUpdateAt,
         this.settings.lastYtDlpAutoUpdateAt,
       ),
+      language: normalizeLanguage(payload.language, this.settings.language),
     }
 
     this.ensureOutputDir(next.outputDir)
@@ -64,6 +65,7 @@ export class SettingsStore {
           parsed.lastYtDlpAutoUpdateAt,
           defaultSettings.lastYtDlpAutoUpdateAt,
         ),
+        language: normalizeLanguage(parsed.language, defaultSettings.language),
       }
     } catch {
       return defaultSettings
@@ -90,6 +92,7 @@ function getDefaultSettings(): AppSettings {
     autoUpdateYtDlp: true,
     ytDlpAutoUpdateMode: 'weekly',
     lastYtDlpAutoUpdateAt: null,
+    language: 'vi',
   }
 }
 
@@ -133,6 +136,17 @@ function normalizeAutoUpdateMode(
   fallback: YtDlpAutoUpdateMode,
 ): YtDlpAutoUpdateMode {
   if (value === 'weekly' || value === 'on-start') {
+    return value
+  }
+
+  return fallback
+}
+
+function normalizeLanguage(
+  value: AppLanguage | undefined,
+  fallback: AppLanguage,
+): AppLanguage {
+  if (value === 'vi' || value === 'en') {
     return value
   }
 

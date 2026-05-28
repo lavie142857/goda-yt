@@ -12,6 +12,8 @@ export type OutputFormat = 'mp4' | 'webm' | 'mkv' | 'avi' | 'mov'
 
 export type YtDlpAutoUpdateMode = 'weekly' | 'on-start'
 
+export type AppLanguage = 'vi' | 'en'
+
 export type ErrorCategory = 'permanent' | 'temporary' | 'system'
 
 export type DownloadStatus =
@@ -71,6 +73,7 @@ export interface AppSettings {
   autoUpdateYtDlp: boolean
   ytDlpAutoUpdateMode: YtDlpAutoUpdateMode
   lastYtDlpAutoUpdateAt: number | null
+  language: AppLanguage
 }
 
 export interface QueueControlState {
