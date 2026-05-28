@@ -8,7 +8,6 @@
   "files": [
     "dist/**/*",
     "dist-electron/**/*",
-    "node_modules/**/*",
     "package.json"
   ],
   "extraResources": [
@@ -26,19 +25,13 @@
   ],
   "win": {
     "icon": "public/icon.ico",
+    "forceCodeSigning": false,
     "target": [
       {
         "target": "portable",
         "arch": ["x64"]
       }
     ]
-  },
-  "nsis": {
-    "oneClick": false,
-    "allowToChangeInstallationDirectory": true,
-    "createDesktopShortcut": true,
-    "createStartMenuShortcut": true,
-    "shortcutName": "FLASH MEDIA"
   }
 }
 
