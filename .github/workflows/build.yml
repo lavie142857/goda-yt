@@ -31,14 +31,15 @@ jobs:
         run: rm -Force -Recurse -Path ./release -ErrorAction SilentlyContinue
         shell: pwsh
 
-      - name: Package app (portable)
-        run: npx electron-builder --win portable
+      - name: Package app (NSIS Installer)
+        run: pwsh ./scripts/build-windows.ps1
+        shell: pwsh
         env:
           NODE_ENV: production
 
       - name: Upload Release Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FLASH-MEDIA-Portable
-          path: release/FLASH-MEDIA-Portable-win64.zip
+          name: FLASH-MEDIA-Setup
+          path: release/*.exe
           retention-days: 30
