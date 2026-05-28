@@ -28,18 +28,13 @@ jobs:
           NODE_ENV: production
 
       - name: Package app (portable)
-        run: npx electron-builder --win portable --publish never
+        run: npx electron-builder --win portable
         env:
           NODE_ENV: production
 
-      - name: Create Release and Upload
-        shell: bash
-        run: |
-          TAG="release-$(date +%s)"
-          git config user.email "github-actions@github.com"
-          git config user.name "GitHub Actions"
-          git tag "$TAG"
-          git push origin "$TAG"
-          gh release create "$TAG" "release/FLASH-MEDIA-Portable-win64.zip" --generate-notes
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FLASH-MEDIA-Portable
+          path: release/FLASH-MEDIA-Portable-win64.zip
+          retention-days: 30
