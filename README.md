@@ -1,4 +1,4 @@
-# YTvibez
+# FLASH MEIDA
 
 Desktop downloader for public YouTube, TikTok, Facebook, and Instagram videos using Electron + yt-dlp.
 
