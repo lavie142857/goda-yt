@@ -14,6 +14,14 @@ export type YtDlpAutoUpdateMode = 'weekly' | 'on-start'
 
 export type AppLanguage = 'vi' | 'en'
 
+export type CookiesBrowser = 'none' | 'chrome' | 'edge' | 'firefox' | 'brave'
+
+export interface UpdateStatus {
+  state: 'downloading' | 'ready' | 'error'
+  version?: string
+  percent?: number
+}
+
 export type ErrorCategory = 'permanent' | 'temporary' | 'system'
 
 export type DownloadStatus =
@@ -73,6 +81,9 @@ export interface AppSettings {
   telemetryEnabled: boolean
   telemetryInstallId: string
   telemetrySent: boolean
+  cookiesBrowser: CookiesBrowser
+  userName: string
+  userEmail: string
 }
 
 export interface QueueControlState {

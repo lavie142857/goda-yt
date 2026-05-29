@@ -1267,6 +1267,249 @@ select option {
   align-items: center;
 }
 
+.settings-section-label {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
+}
+
+.bug-report {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.bug-report-desc {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.bug-report-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.bug-report-text {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 0.85rem;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.bug-report-text:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.bug-report-foot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bug-report-foot .field {
+  min-width: 150px;
+}
+
+.bug-report-foot .primary-button {
+  min-height: 36px;
+}
+
+.field-error {
+  color: var(--error);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.login-hint-button {
+  margin-left: 8px;
+  padding: 2px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--accent);
+  background: var(--accent-soft, transparent);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s var(--ease);
+}
+
+.login-hint-button:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.input-invalid {
+  border-color: var(--error) !important;
+}
+
+.auth-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.auth-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.auth-card-head strong {
+  font-size: 0.92rem;
+}
+
+.auth-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--line-strong);
+}
+
+.auth-badge.on {
+  color: var(--success);
+  border-color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+
+.auth-badge.off {
+  color: var(--muted);
+}
+
+.auth-method {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.auth-method-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.auth-method-text strong {
+  font-size: 0.85rem;
+}
+
+.auth-method-text span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
+.auth-method .primary-button,
+.auth-method .secondary-button {
+  flex-shrink: 0;
+}
+
+.link-button {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.link-button:hover {
+  opacity: 0.8;
+}
+
+.update-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(8, 8, 18, 0.82);
+  backdrop-filter: blur(4px);
+  -webkit-app-region: no-drag;
+}
+
+.update-box {
+  width: min(440px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  padding: 24px;
+  text-align: center;
+  display: grid;
+  gap: 12px;
+  box-shadow: var(--shadow-lg, 0 20px 60px rgba(0, 0, 0, 0.4));
+}
+
+.update-box h2 {
+  font-size: 1.1rem;
+}
+
+.update-desc {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.update-progress {
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--surface-muted);
+  overflow: hidden;
+}
+
+.update-progress > div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s var(--ease);
+}
+
+.update-box .primary-button,
+.update-box .secondary-button {
+  justify-self: center;
+  min-width: 180px;
+  min-height: 38px;
+}
+
+.update-error-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
 .smart-profile {
   border: 1px solid var(--line);
   border-radius: var(--radius-md);

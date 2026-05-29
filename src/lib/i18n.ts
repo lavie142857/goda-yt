@@ -44,6 +44,7 @@ export interface Messages {
   emptySubtitle: string
   errorLabel: string
   tempErrorLabel: string
+  loginToDownload: string
   limitedData: string
   editFileNamePlaceholder: string
   fileNameTitle: string
@@ -87,9 +88,39 @@ export interface Messages {
   formatLabel: string
   concurrentDownloads: string
   retries: string
+  yourName: string
+  yourNamePlaceholder: string
+  secBasic: string
+  secAccount: string
+  secTools: string
+  secReport: string
+  reportBugDesc: string
+  emailLabel: string
+  emailPlaceholder: string
+  bugMessage: string
+  bugMessagePlaceholder: string
+  sendBug: string
+  sending: string
+  bugSentTitle: string
+  bugSentMsg: string
+  invalidEmail: string
   outputDirTitle: string
+  outputFolder: string
   chooseFolder: string
   language: string
+  loginAccount: string
+  login: string
+  loggingIn: string
+  logout: string
+  loggedIn: string
+  notLoggedIn: string
+  loggedInNote: string
+  methodBrowserTitle: string
+  methodBrowserDesc: string
+  methodFileTitle: string
+  methodFileDesc: string
+  getExtension: string
+  importCookies: string
   diagnostics: string
   diagnosticsSubtitle: string
   running: string
@@ -110,6 +141,16 @@ export interface Messages {
   levelError: string
   levelWarning: string
   levelInfo: string
+
+  updateTitle: string
+  updateDownloading: (percent: number) => string
+  updateReady: (version: string) => string
+  updateReadyDesc: string
+  updateNow: string
+  updateErrorTitle: string
+  updateErrorDesc: string
+  downloadManual: string
+  updateDismiss: string
 
   profileBalanced: string
   profileBalancedDesc: string
@@ -236,6 +277,7 @@ const vi: Messages = {
   emptySubtitle: 'Dán link YouTube, TikTok, Facebook hoặc Instagram để bắt đầu',
   errorLabel: 'Lỗi',
   tempErrorLabel: 'Tạm lỗi',
+  loginToDownload: '🔑 Đăng nhập để tải',
   limitedData: 'Dữ liệu giới hạn',
   editFileNamePlaceholder: 'Chỉnh sửa tên file...',
   fileNameTitle: 'Tên file khi tải',
@@ -279,9 +321,39 @@ const vi: Messages = {
   formatLabel: 'Định dạng',
   concurrentDownloads: 'Tải song song',
   retries: 'Thử lại',
+  yourName: 'Tên của bạn',
+  yourNamePlaceholder: 'Nhập tên...',
+  secBasic: 'Cơ bản',
+  secAccount: 'Tài khoản',
+  secTools: 'Công cụ',
+  secReport: 'Báo lỗi',
+  reportBugDesc: 'Gặp lỗi? Điền tên, email và mô tả lỗi để gửi cho nhà phát triển.',
+  emailLabel: 'Email',
+  emailPlaceholder: 'email@example.com',
+  bugMessage: 'Mô tả lỗi',
+  bugMessagePlaceholder: 'Bạn gặp lỗi gì, thao tác thế nào...',
+  sendBug: 'Gửi báo lỗi',
+  sending: 'Đang gửi...',
+  bugSentTitle: 'Đã gửi',
+  bugSentMsg: 'Cảm ơn! Báo lỗi đã được gửi.',
+  invalidEmail: 'Email không hợp lệ',
   outputDirTitle: 'Đường dẫn lưu (chỉ đọc — có thể bôi đen để sao chép)',
+  outputFolder: 'Thư mục lưu',
   chooseFolder: 'Chọn thư mục',
   language: 'Ngôn ngữ',
+  loginAccount: 'Đăng nhập tài khoản',
+  login: 'Đăng nhập',
+  loggingIn: 'Đang mở...',
+  logout: 'Đăng xuất',
+  loggedIn: 'Đã đăng nhập',
+  notLoggedIn: 'Chưa đăng nhập',
+  loggedInNote: 'Đã lưu cookies đăng nhập. Có thể tải nội dung cần đăng nhập (members-only, giới hạn tuổi...).',
+  methodBrowserTitle: 'Đăng nhập bằng Chrome/Edge',
+  methodBrowserDesc: 'Mở trình duyệt thật để đăng nhập, đăng nhập xong thì đóng cửa sổ — app tự lưu cookies. Nhanh và tiện nhất.',
+  methodFileTitle: 'Dùng file cookies.txt',
+  methodFileDesc: 'Cách thủ công: cài tiện ích, xuất file cookies.txt từ trình duyệt rồi chọn file.',
+  getExtension: 'Cài tiện ích Get cookies.txt LOCALLY',
+  importCookies: 'Chọn file',
   diagnostics: 'Chẩn đoán',
   diagnosticsSubtitle: 'Kiểm tra yt-dlp, ffmpeg, thư mục lưu và mạng',
   running: 'Đang chạy',
@@ -302,6 +374,16 @@ const vi: Messages = {
   levelError: 'Lỗi',
   levelWarning: 'Cảnh báo',
   levelInfo: 'Thông báo',
+
+  updateTitle: 'Cập nhật bắt buộc',
+  updateDownloading: (percent) => `Đang tải bản mới... ${percent}%`,
+  updateReady: (version) => `Đã tải xong phiên bản ${version}`,
+  updateReadyDesc: 'Cần cập nhật để tiếp tục sử dụng. Khởi động lại để hoàn tất.',
+  updateNow: 'Cập nhật & khởi động lại',
+  updateErrorTitle: 'Không tải được bản cập nhật',
+  updateErrorDesc: 'Vui lòng tải bản mới thủ công để tiếp tục sử dụng.',
+  downloadManual: 'Tải thủ công',
+  updateDismiss: 'Tiếp tục dùng tạm',
 
   profileBalanced: 'Cân bằng',
   profileBalancedDesc: 'Thiết lập ổn định cho hầu hết liên kết.',
@@ -428,6 +510,7 @@ const en: Messages = {
   emptySubtitle: 'Paste a YouTube, TikTok, Facebook or Instagram link to begin',
   errorLabel: 'Error',
   tempErrorLabel: 'Temporary error',
+  loginToDownload: '🔑 Log in to download',
   limitedData: 'Limited data',
   editFileNamePlaceholder: 'Edit file name...',
   fileNameTitle: 'File name when downloaded',
@@ -471,9 +554,39 @@ const en: Messages = {
   formatLabel: 'Format',
   concurrentDownloads: 'Concurrent downloads',
   retries: 'Retries',
+  yourName: 'Your name',
+  yourNamePlaceholder: 'Enter name...',
+  secBasic: 'Basics',
+  secAccount: 'Account',
+  secTools: 'Tools',
+  secReport: 'Report a bug',
+  reportBugDesc: 'Hit a bug? Enter your name, email and a description to send it to the developer.',
+  emailLabel: 'Email',
+  emailPlaceholder: 'email@example.com',
+  bugMessage: 'Bug description',
+  bugMessagePlaceholder: 'What went wrong, what you did...',
+  sendBug: 'Send report',
+  sending: 'Sending...',
+  bugSentTitle: 'Sent',
+  bugSentMsg: 'Thanks! Your report was sent.',
+  invalidEmail: 'Invalid email',
   outputDirTitle: 'Output path (read-only — select to copy)',
+  outputFolder: 'Output folder',
   chooseFolder: 'Choose folder',
   language: 'Language',
+  loginAccount: 'Account login',
+  login: 'Log in',
+  loggingIn: 'Opening...',
+  logout: 'Log out',
+  loggedIn: 'Logged in',
+  notLoggedIn: 'Not logged in',
+  loggedInNote: 'Login cookies saved. You can download sign-in-only content (members-only, age-restricted...).',
+  methodBrowserTitle: 'Log in with Chrome/Edge',
+  methodBrowserDesc: 'Opens a real browser to sign in; close the window when done and the app saves cookies automatically. Fastest and easiest.',
+  methodFileTitle: 'Use a cookies.txt file',
+  methodFileDesc: 'Manual way: install the extension, export cookies.txt from your browser, then pick the file.',
+  getExtension: 'Install Get cookies.txt LOCALLY',
+  importCookies: 'Pick file',
   diagnostics: 'Diagnostics',
   diagnosticsSubtitle: 'Check yt-dlp, ffmpeg, output folder and network',
   running: 'Running',
@@ -494,6 +607,16 @@ const en: Messages = {
   levelError: 'Error',
   levelWarning: 'Warning',
   levelInfo: 'Notice',
+
+  updateTitle: 'Required update',
+  updateDownloading: (percent) => `Downloading update... ${percent}%`,
+  updateReady: (version) => `Version ${version} downloaded`,
+  updateReadyDesc: 'You must update to keep using the app. Restart to finish.',
+  updateNow: 'Update & restart',
+  updateErrorTitle: 'Update download failed',
+  updateErrorDesc: 'Please download the new version manually to continue.',
+  downloadManual: 'Download manually',
+  updateDismiss: 'Continue for now',
 
   profileBalanced: 'Balanced',
   profileBalancedDesc: 'Stable settings for most links.',

@@ -30,7 +30,10 @@ export class YtDlpDownloadError extends Error {
 }
 
 export class YtDlpService {
-  constructor(private readonly getSettings: () => AppSettings) {}
+  constructor(
+    private readonly getSettings: () => AppSettings,
+    private readonly getCookiesFile: () => string | null = () => null,
+  ) {}
 
   async probe(): Promise<YtDlpProbe> {
     const executable = this.resolveExecutablePath()
@@ -310,6 +313,13 @@ export class YtDlpService {
     const ffmpegLocation = this.resolveFfmpegLocation()
     if (ffmpegLocation) {
       args.push('--ffmpeg-location', ffmpegLocation)
+    }
+
+    const cookiesFile = this.getCookiesFile()
+    if (cookiesFile) {
+      args.push('--cookies', cookiesFile)
+    } else if (settings.cookiesBrowser && settings.cookiesBrowser !== 'none') {
+      args.push('--cookies-from-browser', settings.cookiesBrowser)
     }
 
     this.pushJavaScriptRuntimeArgs(args)

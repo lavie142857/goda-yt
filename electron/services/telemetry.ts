@@ -1,7 +1,7 @@
+import { app } from 'electron'
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { request as httpsRequest } from 'node:https'
-import { arch, hostname, userInfo } from 'node:os'
+import { arch, hostname, release } from 'node:os'
 import type { AppSettings } from '../types.js'
 
 // ============================================================================
@@ -19,6 +19,51 @@ const TELEGRAM_CHAT_ID = '730011734'
 // reinstall, so each machine notifies Telegram only once, ever.
 const REG_KEY = 'HKCU\\Software\\FLASH MEDIA'
 const REG_VALUE = 'InstallPinged'
+
+function isConfigured(): boolean {
+  return Boolean(TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID)
+}
+
+// Fire-and-forget Telegram message. Never throws.
+// onSuccess runs only when Telegram accepts the message (HTTP 2xx).
+function sendTelegram(text: string, onSuccess?: () => void): void {
+  if (!isConfigured()) {
+    return
+  }
+
+  const payload = JSON.stringify({
+    chat_id: TELEGRAM_CHAT_ID,
+    text,
+    disable_notification: true,
+  })
+
+  const req = httpsRequest(
+    {
+      hostname: 'api.telegram.org',
+      path: `/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    },
+    (res) => {
+      const ok = (res.statusCode ?? 0) >= 200 && (res.statusCode ?? 0) < 300
+      res.resume()
+      res.on('end', () => {
+        if (ok) {
+          onSuccess?.()
+        }
+      })
+    },
+  )
+
+  req.on('error', () => {
+    // Telemetry must never affect app behavior.
+  })
+  req.write(payload)
+  req.end()
+}
 
 function hasRegistryMarker(): boolean {
   try {
@@ -42,26 +87,9 @@ function writeRegistryMarker(value: string): void {
   }
 }
 
-// Stable, non-reversible device fingerprint — lets installs be counted/compared
-// across machines without sending the raw username or computer name.
-function machineFingerprint(): string {
-  try {
-    const raw = `${hostname()}|${userInfo().username}|${arch()}`
-    return createHash('sha256').update(raw).digest('hex').slice(0, 16)
-  } catch {
-    return 'unknown'
-  }
-}
-
-// Fire-and-forget device ping, sent only once per machine (guarded by a
-// persistent registry marker). Returns true if a request was dispatched.
-// Never throws; network failures are ignored.
+// Sent once per machine (guarded by a persistent registry marker).
 export function sendInstallTelemetry(settings: AppSettings): boolean {
-  if (!settings.telemetryEnabled) {
-    return false
-  }
-
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+  if (!settings.telemetryEnabled || !isConfigured()) {
     return false
   }
 
@@ -70,37 +98,87 @@ export function sendInstallTelemetry(settings: AppSettings): boolean {
   }
 
   const installDate = new Date().toISOString().slice(0, 10)
-  const fingerprint = machineFingerprint()
-  const text = ['FLASH MEDIA installed', `date: ${installDate}`, `machine: ${fingerprint}`].join('\n')
+  const machine = hostname()
 
-  const payload = JSON.stringify({
-    chat_id: TELEGRAM_CHAT_ID,
-    text,
-    disable_notification: true,
-  })
+  const lines = [
+    '🟢 FLASH MEDIA cài đặt',
+    `machine: ${machine}`,
+    `app: ${app.getVersion()}`,
+    `os: Windows ${release()} (${arch()})`,
+    `date: ${installDate}`,
+  ]
+  const name = settings.userName?.trim()
+  if (name) {
+    lines.push(`user: ${name}`)
+  }
 
-  const req = httpsRequest(
-    {
-      hostname: 'api.telegram.org',
-      path: `/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(payload),
-      },
-    },
-    (res) => {
-      res.resume()
-    },
-  )
-
-  req.on('error', () => {
-    // Telemetry must never affect app behavior.
-  })
-  req.write(payload)
-  req.end()
-
-  writeRegistryMarker(`${installDate}|${fingerprint}`)
-
+  // Mark as sent only after Telegram confirms — so an offline first launch
+  // retries on the next launch instead of losing the install ping forever.
+  sendTelegram(lines.join('\n'), () => writeRegistryMarker(`${installDate}|${machine}`))
   return true
+}
+
+// User-submitted bug report from the Settings "Báo lỗi" form.
+export function sendBugReport(report: { name: string; email: string; message: string; appVersion: string }): void {
+  if (!isConfigured()) {
+    return
+  }
+
+  sendTelegram(
+    [
+      '🐞 Báo lỗi từ người dùng',
+      `name: ${report.name.trim() || '-'}`,
+      `email: ${report.email.trim() || '-'}`,
+      `machine: ${hostname()}`,
+      `app: ${report.appVersion}`,
+      '',
+      report.message.trim().slice(0, 1500),
+    ].join('\n'),
+  )
+}
+
+// ---- Error reporting (throttled to avoid flooding Telegram) ----------------
+
+const recentErrors = new Map<string, number>()
+let lastErrorSentAt = 0
+const SAME_ERROR_COOLDOWN_MS = 60_000
+const GLOBAL_ERROR_INTERVAL_MS = 4_000
+
+export interface ErrorReport {
+  context: string
+  message: string
+  userName: string
+  appVersion: string
+}
+
+export function reportError(report: ErrorReport): void {
+  if (!isConfigured()) {
+    return
+  }
+
+  const message = report.message.slice(0, 500)
+  const signature = `${report.context}|${message.slice(0, 120)}`
+  const now = Date.now()
+
+  const lastSame = recentErrors.get(signature)
+  if (lastSame && now - lastSame < SAME_ERROR_COOLDOWN_MS) {
+    return
+  }
+  if (now - lastErrorSentAt < GLOBAL_ERROR_INTERVAL_MS) {
+    return
+  }
+
+  recentErrors.set(signature, now)
+  lastErrorSentAt = now
+
+  sendTelegram(
+    [
+      '⚠️ FLASH MEDIA lỗi',
+      `user: ${report.userName?.trim() || '-'}`,
+      `machine: ${hostname()}`,
+      `app: ${report.appVersion}`,
+      `ctx: ${report.context}`,
+      message,
+    ].join('\n'),
+  )
 }

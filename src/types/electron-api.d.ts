@@ -6,6 +6,7 @@ import type {
   QueueControlState,
   StartDownloadInput,
   SystemNotification,
+  UpdateStatus,
   VideoMetadata,
   YtDlpProbe,
   YtDlpUpdateResult,
@@ -30,12 +31,21 @@ interface ElectronAPI {
   listNotifications: () => Promise<SystemNotification[]>
   clearNotifications: () => Promise<SystemNotification[]>
   readClipboard: () => Promise<string>
+  reportError: (context: string, message: string) => Promise<void>
+  reportBug: (name: string, email: string, message: string) => Promise<boolean>
+  getAuthStatus: () => Promise<boolean>
+  openLogin: () => Promise<boolean>
+  importCookies: () => Promise<boolean>
+  logout: () => Promise<boolean>
   probeVideoInfo: (url: string) => Promise<VideoMetadata>
   probeVideoMultiple: (urls: string[]) => Promise<VideoMetadata[]>
   onDownloadsChanged: (listener: (tasks: DownloadTask[]) => void) => () => void
   onSettingsChanged: (listener: (settings: AppSettings) => void) => () => void
   onDownloadControlStateChanged: (listener: (state: QueueControlState) => void) => () => void
   onNotificationsChanged: (listener: (items: SystemNotification[]) => void) => () => void
+  installUpdate: () => Promise<void>
+  openReleasesPage: () => Promise<void>
+  onUpdateStatus: (listener: (status: UpdateStatus) => void) => () => void
   windowMinimize: () => Promise<void>
   windowMaximizeToggle: () => Promise<boolean>
   windowClose: () => Promise<void>

@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import type { AppLanguage, AppSettings, OutputFormat, YtDlpAutoUpdateMode } from '../types.js'
+import type { AppLanguage, AppSettings, CookiesBrowser, OutputFormat, YtDlpAutoUpdateMode } from '../types.js'
 
 const SETTINGS_FILE = 'settings.json'
 
@@ -49,6 +49,9 @@ export class SettingsStore {
       telemetryEnabled: normalizeBoolean(payload.telemetryEnabled, this.settings.telemetryEnabled),
       telemetryInstallId: this.settings.telemetryInstallId,
       telemetrySent: normalizeBoolean(payload.telemetrySent, this.settings.telemetrySent),
+      cookiesBrowser: normalizeCookiesBrowser(payload.cookiesBrowser, this.settings.cookiesBrowser),
+      userName: typeof payload.userName === 'string' ? payload.userName.slice(0, 80) : this.settings.userName,
+      userEmail: typeof payload.userEmail === 'string' ? payload.userEmail.slice(0, 120) : this.settings.userEmail,
     }
 
     this.ensureOutputDir(next.outputDir)
@@ -84,6 +87,9 @@ export class SettingsStore {
             ? parsed.telemetryInstallId
             : defaultSettings.telemetryInstallId,
         telemetrySent: normalizeBoolean(parsed.telemetrySent, defaultSettings.telemetrySent),
+        cookiesBrowser: normalizeCookiesBrowser(parsed.cookiesBrowser, defaultSettings.cookiesBrowser),
+        userName: typeof parsed.userName === 'string' ? parsed.userName : defaultSettings.userName,
+        userEmail: typeof parsed.userEmail === 'string' ? parsed.userEmail : defaultSettings.userEmail,
       }
     } catch {
       return defaultSettings
@@ -114,6 +120,9 @@ function getDefaultSettings(): AppSettings {
     telemetryEnabled: true,
     telemetryInstallId: '',
     telemetrySent: false,
+    cookiesBrowser: 'none',
+    userName: '',
+    userEmail: '',
   }
 }
 
@@ -168,6 +177,23 @@ function normalizeLanguage(
   fallback: AppLanguage,
 ): AppLanguage {
   if (value === 'vi' || value === 'en') {
+    return value
+  }
+
+  return fallback
+}
+
+function normalizeCookiesBrowser(
+  value: CookiesBrowser | undefined,
+  fallback: CookiesBrowser,
+): CookiesBrowser {
+  if (
+    value === 'none'
+    || value === 'chrome'
+    || value === 'edge'
+    || value === 'firefox'
+    || value === 'brave'
+  ) {
     return value
   }
 

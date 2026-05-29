@@ -10,6 +10,7 @@ import type {
   QueueControlState,
   OutputFormat,
   SystemNotification,
+  UpdateStatus,
   VideoMetadata,
   VideoQualityOption,
   YtDlpAutoUpdateMode,
@@ -444,6 +445,17 @@ function isTerminalStatus(status: DownloadStatus): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled'
 }
 
+function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+}
+
+// True when an error means the content requires sign-in / cookies to download.
+function needsLogin(rawError: string): boolean {
+  return /requires login|login or .*cookies|cookies are required|not returning public media|account is private|sign in|members[- ]only|join this channel|age[- ]restricted|confirm your age|private video|not available in public-only mode|empty media response/i.test(
+    rawError,
+  )
+}
+
 function App() {
   const [urlInput, setUrlInput] = useState('')
   const [showManualInput, setShowManualInput] = useState(false)
@@ -460,6 +472,13 @@ function App() {
   const [draggedQueueTaskId, setDraggedQueueTaskId] = useState<string | null>(null)
   const [diagnostics, setDiagnostics] = useState<DiagnosticsReport | null>(null)
   const [isRunningDiagnostics, setIsRunningDiagnostics] = useState(false)
+  const [authLoggedIn, setAuthLoggedIn] = useState(false)
+  const [isLoggingIn, setIsLoggingIn] = useState(false)
+  const [bugName, setBugName] = useState('')
+  const [bugEmail, setBugEmail] = useState('')
+  const [bugMsg, setBugMsg] = useState('')
+  const [isSendingBug, setIsSendingBug] = useState(false)
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('theme')
     if (saved === 'dark' || saved === 'light') return saved
@@ -483,6 +502,10 @@ function App() {
 
   const hasBridge = Boolean(window.electronAPI)
   const t = getMessages(settings?.language)
+  // Suggest logging in for explicit auth errors, and for the generic failure
+  // (whose message itself lists "requires sign-in" as a likely cause).
+  const suggestLogin = (rawError: string): boolean =>
+    needsLogin(rawError) || formatQueueError(rawError, t) === t.errGeneric
   const isSettingsVisible = Boolean(settings?.showSettingsPanel)
   const batchTargets = selectedIds.size > 0
     ? stagedVideos.filter((video) => selectedIds.has(video.id))
@@ -559,6 +582,8 @@ function App() {
     window.electronAPI.listDownloads().then(setQueue)
     window.electronAPI.getDownloadControlState().then(setQueueControl)
     window.electronAPI.probeYtDlp().then(setProbe)
+    window.electronAPI.getAuthStatus().then(setAuthLoggedIn)
+    const offUpdate = window.electronAPI.onUpdateStatus(setUpdateStatus)
 
     const offQueue = window.electronAPI.onDownloadsChanged(setQueue)
     const offSettings = window.electronAPI.onSettingsChanged(setSettings)
@@ -572,6 +597,7 @@ function App() {
       offSettings()
       offQueueControl()
       offMax()
+      offUpdate()
     }
   }, [hasBridge])
 
@@ -617,6 +643,32 @@ function App() {
     el.style.height = 'auto'
     el.style.height = `${el.scrollHeight}px`
   }, [showManualInput, urlInput])
+
+  useEffect(() => {
+    setBugName(settings?.userName ?? '')
+    setBugEmail(settings?.userEmail ?? '')
+  }, [settings?.userName, settings?.userEmail])
+
+  // Forward renderer crashes to the error reporter.
+  useEffect(() => {
+    if (!hasBridge) return
+
+    const onError = (event: ErrorEvent) => {
+      // .catch prevents a reject -> unhandledrejection -> report loop.
+      window.electronAPI.reportError('window-error', `${event.message} @ ${event.filename}:${event.lineno}`).catch(() => {})
+    }
+    const onRejection = (event: PromiseRejectionEvent) => {
+      const reason = event.reason instanceof Error ? event.reason.message : String(event.reason)
+      window.electronAPI.reportError('unhandled-rejection', reason).catch(() => {})
+    }
+
+    window.addEventListener('error', onError)
+    window.addEventListener('unhandledrejection', onRejection)
+    return () => {
+      window.removeEventListener('error', onError)
+      window.removeEventListener('unhandledrejection', onRejection)
+    }
+  }, [hasBridge])
 
   const updateSettings = useCallback(async (patch: Partial<AppSettings>): Promise<void> => {
     if (!hasBridge) return
@@ -1132,6 +1184,65 @@ function App() {
     }
   }
 
+  async function onOpenLogin(): Promise<void> {
+    if (!hasBridge || isLoggingIn) {
+      return
+    }
+
+    setIsLoggingIn(true)
+    try {
+      const loggedIn = await window.electronAPI.openLogin()
+      setAuthLoggedIn(loggedIn)
+    } finally {
+      setIsLoggingIn(false)
+    }
+  }
+
+  async function onImportCookies(): Promise<void> {
+    if (!hasBridge) {
+      return
+    }
+
+    const loggedIn = await window.electronAPI.importCookies()
+    setAuthLoggedIn(loggedIn)
+  }
+
+  async function onLogout(): Promise<void> {
+    if (!hasBridge) {
+      return
+    }
+
+    const loggedIn = await window.electronAPI.logout()
+    setAuthLoggedIn(loggedIn)
+  }
+
+  async function openLoginSettings(): Promise<void> {
+    if (!settings) {
+      return
+    }
+    if (!settings.showSettingsPanel) {
+      await updateSettings({ showSettingsPanel: true })
+    }
+    setTimeout(() => {
+      document.getElementById('auth-section')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 200)
+  }
+
+  async function onSendBug(): Promise<void> {
+    if (!hasBridge || isSendingBug || !bugMsg.trim() || !isValidEmail(bugEmail)) {
+      return
+    }
+
+    setIsSendingBug(true)
+    try {
+      await window.electronAPI.reportBug(bugName.trim(), bugEmail.trim(), bugMsg.trim())
+      setBugMsg('')
+      showToast('success', t.bugSentTitle, t.bugSentMsg)
+    } finally {
+      setIsSendingBug(false)
+    }
+  }
+
   function toggleSelectAll(): void {
     if (allStagedSelected) {
       setSelectedIds(new Set())
@@ -1430,6 +1541,11 @@ function App() {
                   {video.error && (
                     <div className="video-status-badge error-badge" title={video.error.message}>
                       ⚠ {video.error.category === 'permanent' ? t.errorLabel : t.tempErrorLabel}: {formatQueueError(video.error.message, t)}
+                      {suggestLogin(video.error.message) && (
+                        <button className="login-hint-button" type="button" onClick={() => void openLoginSettings()}>
+                          {t.loginToDownload}
+                        </button>
+                      )}
                     </div>
                   )}
                   {!video.error && video.warning && (
@@ -1531,6 +1647,11 @@ function App() {
                       {task.status === 'active' && <span className="speed-tag">{task.progress.speed}</span>}
                       {task.status === 'active' && <span>ETA {task.progress.eta}</span>}
                       {task.error && <span className="row-error">{formatQueueError(task.error, t)}</span>}
+                      {task.error && suggestLogin(task.error) && (
+                        <button className="login-hint-button" type="button" onClick={() => void openLoginSettings()}>
+                          {t.loginToDownload}
+                        </button>
+                      )}
                     </div>
                     {!isTerminalStatus(task.status) && (
                       <div className={`desktop-progress ${task.status === 'active' ? 'progress-animated' : ''}`} aria-hidden="true">
@@ -1633,57 +1754,7 @@ function App() {
                 </button>
               </div>
 
-              <div className="settings-health-row">
-                <div className="tool-pill settings-tool-pill">
-                  <span>yt-dlp</span>
-                  <strong className={probe?.available ? 'state-ready' : 'state-error'}>
-                    {probe?.available ? t.ytDlpReady : t.offline}
-                  </strong>
-                  <small>{probe?.version ?? t.notDetected}</small>
-                </div>
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => void onUpdateYtDlp()}
-                  disabled={isUpdatingYtDlp}
-                >
-                  {isUpdatingYtDlp ? t.updating : t.updateYtDlp}
-                </button>
-              </div>
-
-              <div className="settings-auto-row">
-                <label className="switch-line">
-                  <input
-                    className="switch-input"
-                    type="checkbox"
-                    checked={settings?.autoUpdateYtDlp ?? false}
-                    onChange={(event) =>
-                      void updateSettings({ autoUpdateYtDlp: event.target.checked })
-                    }
-                    disabled={!settings}
-                  />
-                  <span className="switch-track" aria-hidden="true">
-                    <span className="switch-thumb" />
-                  </span>
-                  <span className="switch-text">{t.autoUpdateYtDlp}</span>
-                </label>
-
-                <label className="field compact-field">
-                  <span>{t.updateSchedule}</span>
-                  <select
-                    value={settings?.ytDlpAutoUpdateMode ?? 'weekly'}
-                    onChange={(event) =>
-                      void updateSettings({ ytDlpAutoUpdateMode: event.target.value as YtDlpAutoUpdateMode })
-                    }
-                    disabled={!settings || !settings.autoUpdateYtDlp}
-                  >
-                    <option value="weekly">{t.weekly}</option>
-                    <option value="on-start">{t.onStart}</option>
-                  </select>
-                </label>
-
-                <small>{t.lastAutoUpdate(formatDateTime(settings?.lastYtDlpAutoUpdateAt ?? null, t))}</small>
-              </div>
+              <div className="settings-section-label">{t.secBasic}</div>
 
               <div className="smart-profile-grid">
                 {SMART_PROFILES.map((profile) => (
@@ -1752,27 +1823,130 @@ function App() {
                     ))}
                   </select>
                 </label>
-
-                <label className="field">
-                  <span>{t.language}</span>
-                  <select
-                    value={settings?.language ?? 'vi'}
-                    onChange={(event) =>
-                      void updateSettings({ language: event.target.value as AppLanguage })
-                    }
-                    disabled={!settings}
-                  >
-                    <option value="vi">Tiếng Việt</option>
-                    <option value="en">English</option>
-                  </select>
-                </label>
               </div>
+
+              <div className="settings-section-label">{t.outputFolder}</div>
 
               <div className="folder-row">
                 <input type="text" value={settings?.outputDir ?? ''} readOnly title={t.outputDirTitle} />
                 <button className="secondary-button" type="button" onClick={() => void pickOutputDirectory()}>
                   {t.chooseFolder}
                 </button>
+              </div>
+
+              <div className="settings-section-label" id="auth-section">{t.secAccount}</div>
+
+              <div className="auth-card">
+                <div className="auth-card-head">
+                  <strong>{t.loginAccount}</strong>
+                  <span className={`auth-badge ${authLoggedIn ? 'on' : 'off'}`}>
+                    {authLoggedIn ? t.loggedIn : t.notLoggedIn}
+                  </span>
+                </div>
+
+                {authLoggedIn ? (
+                  <div className="auth-method">
+                    <div className="auth-method-text">
+                      <span>{t.loggedInNote}</span>
+                    </div>
+                    <button className="secondary-button" type="button" onClick={() => void onLogout()}>
+                      {t.logout}
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="auth-method">
+                      <div className="auth-method-text">
+                        <strong>{t.methodBrowserTitle}</strong>
+                        <span>{t.methodBrowserDesc}</span>
+                      </div>
+                      <button
+                        className="primary-button"
+                        type="button"
+                        onClick={() => void onOpenLogin()}
+                        disabled={isLoggingIn}
+                      >
+                        {isLoggingIn ? t.loggingIn : t.login}
+                      </button>
+                    </div>
+
+                    <div className="auth-method">
+                      <div className="auth-method-text">
+                        <strong>{t.methodFileTitle}</strong>
+                        <span>{t.methodFileDesc}</span>
+                        <button
+                          className="link-button"
+                          type="button"
+                          onClick={() =>
+                            window.open(
+                              'https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc',
+                              '_blank',
+                            )
+                          }
+                        >
+                          {t.getExtension} ↗
+                        </button>
+                      </div>
+                      <button className="secondary-button" type="button" onClick={() => void onImportCookies()}>
+                        {t.importCookies}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="settings-section-label">{t.secTools}</div>
+
+              <div className="settings-health-row">
+                <div className="tool-pill settings-tool-pill">
+                  <span>yt-dlp</span>
+                  <strong className={probe?.available ? 'state-ready' : 'state-error'}>
+                    {probe?.available ? t.ytDlpReady : t.offline}
+                  </strong>
+                  <small>{probe?.version ?? t.notDetected}</small>
+                </div>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => void onUpdateYtDlp()}
+                  disabled={isUpdatingYtDlp}
+                >
+                  {isUpdatingYtDlp ? t.updating : t.updateYtDlp}
+                </button>
+              </div>
+
+              <div className="settings-auto-row">
+                <label className="switch-line">
+                  <input
+                    className="switch-input"
+                    type="checkbox"
+                    checked={settings?.autoUpdateYtDlp ?? false}
+                    onChange={(event) =>
+                      void updateSettings({ autoUpdateYtDlp: event.target.checked })
+                    }
+                    disabled={!settings}
+                  />
+                  <span className="switch-track" aria-hidden="true">
+                    <span className="switch-thumb" />
+                  </span>
+                  <span className="switch-text">{t.autoUpdateYtDlp}</span>
+                </label>
+
+                <label className="field compact-field">
+                  <span>{t.updateSchedule}</span>
+                  <select
+                    value={settings?.ytDlpAutoUpdateMode ?? 'weekly'}
+                    onChange={(event) =>
+                      void updateSettings({ ytDlpAutoUpdateMode: event.target.value as YtDlpAutoUpdateMode })
+                    }
+                    disabled={!settings || !settings.autoUpdateYtDlp}
+                  >
+                    <option value="weekly">{t.weekly}</option>
+                    <option value="on-start">{t.onStart}</option>
+                  </select>
+                </label>
+
+                <small>{t.lastAutoUpdate(formatDateTime(settings?.lastYtDlpAutoUpdateAt ?? null, t))}</small>
               </div>
 
               <div className="diagnostics-panel">
@@ -1815,6 +1989,69 @@ function App() {
                     </li>
                   </ul>
                 )}
+              </div>
+
+              <div className="settings-section-label">{t.secReport}</div>
+
+              <div className="bug-report">
+                <p className="bug-report-desc">{t.reportBugDesc}</p>
+                <div className="bug-report-row">
+                  <label className="field">
+                    <span>{t.yourName}</span>
+                    <input
+                      type="text"
+                      value={bugName}
+                      placeholder={t.yourNamePlaceholder}
+                      onChange={(event) => setBugName(event.target.value)}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>{t.emailLabel}</span>
+                    <input
+                      type="email"
+                      className={bugEmail.trim() && !isValidEmail(bugEmail) ? 'input-invalid' : ''}
+                      value={bugEmail}
+                      placeholder={t.emailPlaceholder}
+                      onChange={(event) => setBugEmail(event.target.value)}
+                    />
+                    {bugEmail.trim() && !isValidEmail(bugEmail) && (
+                      <small className="field-error">{t.invalidEmail}</small>
+                    )}
+                  </label>
+                </div>
+                <label className="field">
+                  <span>{t.bugMessage}</span>
+                  <textarea
+                    className="bug-report-text"
+                    value={bugMsg}
+                    placeholder={t.bugMessagePlaceholder}
+                    onChange={(event) => setBugMsg(event.target.value)}
+                    rows={3}
+                  />
+                </label>
+                <div className="bug-report-foot">
+                  <label className="field compact-field">
+                    <span>{t.language}</span>
+                    <select
+                      value={settings?.language ?? 'vi'}
+                      onChange={(event) =>
+                        void updateSettings({ language: event.target.value as AppLanguage })
+                      }
+                      disabled={!settings}
+                    >
+                      <option value="vi">Tiếng Việt</option>
+                      <option value="en">English</option>
+                    </select>
+                  </label>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    onClick={() => void onSendBug()}
+                    disabled={isSendingBug || !bugMsg.trim() || !isValidEmail(bugEmail)}
+                  >
+                    {isSendingBug ? t.sending : t.sendBug}
+                  </button>
+                </div>
               </div>
             </section>
           </div>
@@ -1906,6 +2143,50 @@ function App() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Forced update overlay — blocks the app until updated */}
+      {updateStatus && (
+        <div className="update-overlay">
+          <div className="update-box">
+            <h2>{t.updateTitle}</h2>
+            {updateStatus.state === 'downloading' && (
+              <>
+                <p>{t.updateDownloading(updateStatus.percent ?? 0)}</p>
+                <div className="update-progress">
+                  <div style={{ width: `${updateStatus.percent ?? 0}%` }} />
+                </div>
+              </>
+            )}
+            {updateStatus.state === 'ready' && (
+              <>
+                <p>{t.updateReady(updateStatus.version ?? '')}</p>
+                <p className="update-desc">{t.updateReadyDesc}</p>
+                <button className="primary-button" type="button" onClick={() => void window.electronAPI.installUpdate()}>
+                  {t.updateNow}
+                </button>
+              </>
+            )}
+            {updateStatus.state === 'error' && (
+              <>
+                <p>{t.updateErrorTitle}</p>
+                <p className="update-desc">{t.updateErrorDesc}</p>
+                <div className="update-error-actions">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void window.electronAPI.openReleasesPage()}
+                  >
+                    {t.downloadManual}
+                  </button>
+                  <button className="ghost-button" type="button" onClick={() => setUpdateStatus(null)}>
+                    {t.updateDismiss}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -5,9 +5,10 @@ import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { get as httpsGet } from 'node:https'
 import path from 'node:path'
+import { AuthStore } from './services/auth-store.js'
 import { DownloadManager } from './services/download-manager.js'
 import { SettingsStore } from './services/settings-store.js'
-import { sendInstallTelemetry } from './services/telemetry.js'
+import { reportError, sendBugReport, sendInstallTelemetry } from './services/telemetry.js'
 import { YtDlpService } from './services/yt-dlp-service.js'
 import { VideoInfoService } from './services/video-info-service.js'
 import type {
@@ -17,6 +18,7 @@ import type {
   DownloadTask,
   StartDownloadInput,
   SystemNotification,
+  UpdateStatus,
 } from './types.js'
 
 app.setPath('sessionData', path.join(app.getPath('userData'), 'session-data'))
@@ -24,8 +26,12 @@ app.setPath('sessionData', path.join(app.getPath('userData'), 'session-data'))
 let mainWindow: InstanceType<typeof BrowserWindow> | null = null
 
 const settingsStore = new SettingsStore()
-const ytDlpService = new YtDlpService(() => settingsStore.get())
-const videoInfoService = new VideoInfoService()
+const authStore = new AuthStore()
+const ytDlpService = new YtDlpService(
+  () => settingsStore.get(),
+  () => authStore.getCookiesFilePath(),
+)
+const videoInfoService = new VideoInfoService(() => authStore.getCookiesFilePath())
 const notifications: SystemNotification[] = []
 const taskStatusSnapshot = new Map<string, DownloadTask['status']>()
 
@@ -52,6 +58,35 @@ function toErrorMessage(error: unknown): string {
 
   return String(error)
 }
+
+// Report an error to Telegram (respects the telemetry toggle, includes identity).
+function maybeReportError(context: string, message: string): void {
+  const settings = settingsStore.get()
+  if (!settings.telemetryEnabled) {
+    return
+  }
+
+  reportError({
+    context,
+    message,
+    userName: settings.userName,
+    appVersion: app.getVersion(),
+  })
+}
+
+function sendUpdateStatus(status: UpdateStatus): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update:status', status)
+  }
+}
+
+process.on('uncaughtException', (error) => {
+  maybeReportError('main-uncaught', toErrorMessage(error))
+})
+
+process.on('unhandledRejection', (reason) => {
+  maybeReportError('main-rejection', toErrorMessage(reason))
+})
 
 function pushNotification(
   notification: Omit<SystemNotification, 'id' | 'timestamp'>,
@@ -470,12 +505,82 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('clipboard:read', () => clipboard.readText())
 
+  ipcMain.handle('report:error', async (_event, context: string, message: string) => {
+    maybeReportError(`renderer-${context}`, message)
+  })
+
+  ipcMain.handle('report:bug', async (_event, name: string, email: string, message: string) => {
+    const persisted = settingsStore.update({ userName: name, userEmail: email })
+    sendBugReport({ name, email, message, appVersion: app.getVersion() })
+    mainWindow?.webContents.send('settings:changed', persisted)
+    return true
+  })
+
+  ipcMain.handle('update:install', async () => {
+    autoUpdater.quitAndInstall()
+  })
+
+  ipcMain.handle('update:open-releases', async () => {
+    await shell.openExternal('https://github.com/lavie142857/goda-yt/releases/latest')
+  })
+
+  ipcMain.handle('auth:status', async () => authStore.hasCookiesFile())
+
+  ipcMain.handle('auth:open-login', async () => {
+    const result = await authStore.loginViaBrowser()
+
+    if (result.ok) {
+      pushNotification({
+        level: 'success',
+        source: 'system',
+        message: 'Đã đăng nhập tài khoản, cookies đã được lưu.',
+      })
+    } else {
+      const reason =
+        result.error === 'no-browser'
+          ? 'Không tìm thấy Chrome hoặc Edge trên máy.'
+          : result.error === 'no-cookies'
+            ? 'Chưa lấy được cookies. Hãy đăng nhập rồi đóng cửa sổ trình duyệt.'
+            : 'Không mở được trình duyệt để đăng nhập.'
+      pushNotification({ level: 'warning', source: 'system', message: reason })
+    }
+
+    return authStore.hasCookiesFile()
+  })
+
+  ipcMain.handle('auth:import-cookies', async () => {
+    const picked = await dialog.showOpenDialog({
+      title: 'Chọn file cookies.txt',
+      properties: ['openFile'],
+      filters: [{ name: 'cookies.txt', extensions: ['txt'] }],
+    })
+
+    if (picked.canceled || picked.filePaths.length === 0) {
+      return authStore.hasCookiesFile()
+    }
+
+    const imported = authStore.importCookiesFile(picked.filePaths[0])
+    if (imported) {
+      pushNotification({
+        level: 'success',
+        source: 'system',
+        message: 'Đã nhập cookies đăng nhập.',
+      })
+    }
+    return authStore.hasCookiesFile()
+  })
+
+  ipcMain.handle('auth:logout', async () => {
+    authStore.logout()
+    return false
+  })
+
   ipcMain.handle('video:probe-info', async (_event, url: string) => {
-    return videoInfoService.probeVideoInfo(url)
+    return videoInfoService.probeVideoInfo(url, settingsStore.get().cookiesBrowser)
   })
 
   ipcMain.handle('video:probe-multiple', async (_event, urls: string[]) => {
-    return videoInfoService.probeMultiple(urls)
+    return videoInfoService.probeMultiple(urls, settingsStore.get().cookiesBrowser)
   })
 
   ipcMain.handle('window:minimize', () => {
@@ -509,38 +614,29 @@ function setupAppAutoUpdate(): void {
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
 
+  // Only block the app once an update is actually found. A failed update *check*
+  // (offline, GitHub unreachable, no release yet) must NOT lock out a working app.
+  let updateActive = false
+
   autoUpdater.on('update-available', (info) => {
-    pushNotification({
-      level: 'info',
-      source: 'system',
-      message: `Đang tải bản cập nhật ${info.version}...`,
-    })
+    updateActive = true
+    sendUpdateStatus({ state: 'downloading', version: info.version, percent: 0 })
   })
 
-  autoUpdater.on('update-downloaded', async (info) => {
-    pushNotification({
-      level: 'success',
-      source: 'system',
-      message: `Đã tải bản ${info.version}. Khởi động lại để cập nhật.`,
-    })
+  autoUpdater.on('download-progress', (progress) => {
+    sendUpdateStatus({ state: 'downloading', percent: Math.round(progress.percent) })
+  })
 
-    const choice = await dialog.showMessageBox({
-      type: 'info',
-      buttons: ['Khởi động lại ngay', 'Để sau'],
-      defaultId: 0,
-      cancelId: 1,
-      title: 'Cập nhật đã sẵn sàng',
-      message: `Phiên bản ${info.version} đã được tải về.`,
-      detail: 'Khởi động lại ứng dụng để hoàn tất cập nhật.',
-    })
-
-    if (choice.response === 0) {
-      autoUpdater.quitAndInstall()
-    }
+  autoUpdater.on('update-downloaded', (info) => {
+    sendUpdateStatus({ state: 'ready', version: info.version })
   })
 
   autoUpdater.on('error', (error) => {
     console.error('[FLASH MEDIA] auto-update error:', toErrorMessage(error))
+    // Show the blocking error UI only if a real update download was underway.
+    if (updateActive) {
+      sendUpdateStatus({ state: 'error' })
+    }
   })
 
   autoUpdater.checkForUpdates().catch((error) => {
@@ -557,13 +653,9 @@ app.whenReady().then(() => {
   void runScheduledAutoUpdate()
   setupAppAutoUpdate()
 
-  const telemetrySettings = settingsStore.get()
-  if (!telemetrySettings.telemetrySent) {
-    const dispatched = sendInstallTelemetry(telemetrySettings)
-    if (dispatched) {
-      settingsStore.update({ telemetrySent: true })
-    }
-  }
+  // Guarded internally by a persistent registry marker (written only on a
+  // successful send), so calling every launch safely retries if it failed.
+  sendInstallTelemetry(settingsStore.get())
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

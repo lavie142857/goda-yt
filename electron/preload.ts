@@ -8,6 +8,7 @@ import type {
   StartDownloadInput,
   SystemNotification,
   VideoMetadata,
+  UpdateStatus,
   YtDlpProbe,
   YtDlpUpdateResult,
 } from './types.js'
@@ -54,6 +55,20 @@ const api = {
 
   readClipboard: (): Promise<string> => ipcRenderer.invoke('clipboard:read'),
 
+  reportError: (context: string, message: string): Promise<void> =>
+    ipcRenderer.invoke('report:error', context, message),
+
+  reportBug: (name: string, email: string, message: string): Promise<boolean> =>
+    ipcRenderer.invoke('report:bug', name, email, message),
+
+  getAuthStatus: (): Promise<boolean> => ipcRenderer.invoke('auth:status'),
+
+  openLogin: (): Promise<boolean> => ipcRenderer.invoke('auth:open-login'),
+
+  importCookies: (): Promise<boolean> => ipcRenderer.invoke('auth:import-cookies'),
+
+  logout: (): Promise<boolean> => ipcRenderer.invoke('auth:logout'),
+
   probeVideoInfo: (url: string): Promise<VideoMetadata> =>
     ipcRenderer.invoke('video:probe-info', url),
 
@@ -94,6 +109,19 @@ const api = {
 
     ipcRenderer.on('notifications:changed', wrapped)
     return () => ipcRenderer.removeListener('notifications:changed', wrapped)
+  },
+
+  installUpdate: (): Promise<void> => ipcRenderer.invoke('update:install'),
+
+  openReleasesPage: (): Promise<void> => ipcRenderer.invoke('update:open-releases'),
+
+  onUpdateStatus: (listener: (status: UpdateStatus) => void): (() => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, status: UpdateStatus) => {
+      listener(status)
+    }
+
+    ipcRenderer.on('update:status', wrapped)
+    return () => ipcRenderer.removeListener('update:status', wrapped)
   },
 
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window:minimize'),

@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import type {
+  CookiesBrowser,
   DownloadPlatform,
   ErrorCategory,
   VideoMetadata,
@@ -160,7 +161,9 @@ function classifyError(errorOutput: string): { message: string; category: ErrorC
 }
 
 export class VideoInfoService {
-  async probeVideoInfo(url: string): Promise<VideoMetadata> {
+  constructor(private readonly getCookiesFile: () => string | null = () => null) {}
+
+  async probeVideoInfo(url: string, cookiesBrowser: CookiesBrowser = 'none'): Promise<VideoMetadata> {
     const platform = detectPlatform(url)
     if (!platform) {
       return {
@@ -178,7 +181,7 @@ export class VideoInfoService {
       }
     }
 
-    const primaryProbe = await this.probeViaYtDlp(url, platform)
+    const primaryProbe = await this.probeViaYtDlp(url, platform, cookiesBrowser)
 
     if (primaryProbe.ok) {
       const filledMetadata = this.fillMissingMetadata(primaryProbe.metadata)
@@ -210,7 +213,7 @@ export class VideoInfoService {
     return this.hydrateThumbnail(fallbackResult)
   }
 
-  async probeMultiple(urls: string[]): Promise<VideoMetadata[]> {
+  async probeMultiple(urls: string[], cookiesBrowser: CookiesBrowser = 'none'): Promise<VideoMetadata[]> {
     const concurrency = 3
     const results: VideoMetadata[] = new Array(urls.length)
     let nextIndex = 0
@@ -218,7 +221,7 @@ export class VideoInfoService {
     const runNext = async (): Promise<void> => {
       while (nextIndex < urls.length) {
         const currentIndex = nextIndex++
-        results[currentIndex] = await this.probeVideoInfo(urls[currentIndex])
+        results[currentIndex] = await this.probeVideoInfo(urls[currentIndex], cookiesBrowser)
       }
     }
 
@@ -231,7 +234,11 @@ export class VideoInfoService {
     return results
   }
 
-  private probeViaYtDlp(url: string, platform: DownloadPlatform): Promise<ProbeResult> {
+  private probeViaYtDlp(
+    url: string,
+    platform: DownloadPlatform,
+    cookiesBrowser: CookiesBrowser,
+  ): Promise<ProbeResult> {
     return new Promise((resolve) => {
       const executable = resolveYtDlpPath()
       const args = [
@@ -243,6 +250,13 @@ export class VideoInfoService {
         '--socket-timeout',
         '10',
       ]
+
+      const cookiesFile = this.getCookiesFile()
+      if (cookiesFile) {
+        args.push('--cookies', cookiesFile)
+      } else if (cookiesBrowser && cookiesBrowser !== 'none') {
+        args.push('--cookies-from-browser', cookiesBrowser)
+      }
 
       this.pushJavaScriptRuntimeArgs(args)
       args.push(url)
