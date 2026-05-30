@@ -52,6 +52,7 @@ export class SettingsStore {
       cookiesBrowser: normalizeCookiesBrowser(payload.cookiesBrowser, this.settings.cookiesBrowser),
       userName: typeof payload.userName === 'string' ? payload.userName.slice(0, 80) : this.settings.userName,
       userEmail: typeof payload.userEmail === 'string' ? payload.userEmail.slice(0, 120) : this.settings.userEmail,
+      lastVersion: typeof payload.lastVersion === 'string' ? payload.lastVersion : this.settings.lastVersion,
     }
 
     this.ensureOutputDir(next.outputDir)
@@ -90,6 +91,7 @@ export class SettingsStore {
         cookiesBrowser: normalizeCookiesBrowser(parsed.cookiesBrowser, defaultSettings.cookiesBrowser),
         userName: typeof parsed.userName === 'string' ? parsed.userName : defaultSettings.userName,
         userEmail: typeof parsed.userEmail === 'string' ? parsed.userEmail : defaultSettings.userEmail,
+        lastVersion: typeof parsed.lastVersion === 'string' ? parsed.lastVersion : defaultSettings.lastVersion,
       }
     } catch {
       return defaultSettings
@@ -123,6 +125,7 @@ function getDefaultSettings(): AppSettings {
     cookiesBrowser: 'none',
     userName: '',
     userEmail: '',
+    lastVersion: '',
   }
 }
 

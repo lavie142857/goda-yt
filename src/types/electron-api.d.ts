@@ -38,7 +38,8 @@ interface ElectronAPI {
   importCookies: () => Promise<boolean>
   logout: () => Promise<boolean>
   probeVideoInfo: (url: string) => Promise<VideoMetadata>
-  probeVideoMultiple: (urls: string[]) => Promise<VideoMetadata[]>
+  probeVideoStream: (urls: string[]) => Promise<void>
+  onProbeResult: (listener: (metadata: VideoMetadata) => void) => () => void
   onDownloadsChanged: (listener: (tasks: DownloadTask[]) => void) => () => void
   onSettingsChanged: (listener: (settings: AppSettings) => void) => () => void
   onDownloadControlStateChanged: (listener: (state: QueueControlState) => void) => () => void

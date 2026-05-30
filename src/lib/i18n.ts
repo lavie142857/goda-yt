@@ -45,10 +45,13 @@ export interface Messages {
   errorLabel: string
   tempErrorLabel: string
   loginToDownload: string
+  reusedBadge: string
+  reusedHint: string
   limitedData: string
   editFileNamePlaceholder: string
   fileNameTitle: string
   toMp3Title: string
+  reloadMetadata: string
   renameFileTitle: string
   downloadNowTitle: string
   removeFromListTitle: string
@@ -278,10 +281,13 @@ const vi: Messages = {
   errorLabel: 'Lỗi',
   tempErrorLabel: 'Tạm lỗi',
   loginToDownload: '🔑 Đăng nhập để tải',
+  reusedBadge: 'Dùng lại',
+  reusedHint: 'Đã có sẵn từ lần tải trước — sao chép sang thư mục lưu, không tải lại.',
   limitedData: 'Dữ liệu giới hạn',
   editFileNamePlaceholder: 'Chỉnh sửa tên file...',
   fileNameTitle: 'Tên file khi tải',
   toMp3Title: 'Chuyển sang MP3',
+  reloadMetadata: 'Tải lại thông tin / chất lượng',
   renameFileTitle: 'Đổi tên file',
   downloadNowTitle: 'Tải ngay',
   removeFromListTitle: 'Xóa khỏi danh sách',
@@ -511,10 +517,13 @@ const en: Messages = {
   errorLabel: 'Error',
   tempErrorLabel: 'Temporary error',
   loginToDownload: '🔑 Log in to download',
+  reusedBadge: 'Reused',
+  reusedHint: 'Already downloaded before — copied to your save folder instead of re-downloading.',
   limitedData: 'Limited data',
   editFileNamePlaceholder: 'Edit file name...',
   fileNameTitle: 'File name when downloaded',
   toMp3Title: 'Switch to MP3',
+  reloadMetadata: 'Reload info / quality',
   renameFileTitle: 'Rename file',
   downloadNowTitle: 'Download now',
   removeFromListTitle: 'Remove from list',

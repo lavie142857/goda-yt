@@ -1,6 +1,12 @@
-import { existsSync } from 'node:fs'
 import path from 'node:path'
-import { spawn, spawnSync } from 'node:child_process'
+import { readdirSync, statSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import {
+  pushJsRuntimeArgs,
+  resolveFfmpegLocation,
+  resolveNodeRuntimeSpec,
+  resolveYtDlpPath,
+} from './binaries.js'
 import { detectPlatform } from './platform.js'
 import type {
   AppSettings,
@@ -36,7 +42,7 @@ export class YtDlpService {
   ) {}
 
   async probe(): Promise<YtDlpProbe> {
-    const executable = this.resolveExecutablePath()
+    const executable = resolveYtDlpPath()
 
     return new Promise((resolve) => {
       const child = spawn(executable, ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] })
@@ -82,7 +88,7 @@ export class YtDlpService {
   }
 
   async updateBinary(): Promise<YtDlpUpdateResult> {
-    const executable = this.resolveExecutablePath()
+    const executable = resolveYtDlpPath()
 
     return new Promise((resolve) => {
       const child = spawn(executable, ['-U'], {
@@ -136,7 +142,7 @@ export class YtDlpService {
     request: DownloadRequest,
     options: DownloadExecOptions,
   ): Promise<void> {
-    const executable = this.resolveExecutablePath()
+    const executable = resolveYtDlpPath()
     const platform = detectPlatform(request.url)
     const outputDir = request.outputDir?.trim() || options.settings.outputDir
     const runWithArgs = async (args: string[]): Promise<void> => {
@@ -234,14 +240,26 @@ export class YtDlpService {
       })
     }
 
+    // yt-dlp's console output drops emoji/special chars from filenames (even with
+    // --print), so the path parsed from stdout can mismatch the real file. After a
+    // successful download, locate the actual file on disk by its known name stem.
+    const finalizeOutput = () => {
+      const located = this.locateFinalOutput(request, options.settings)
+      if (located) {
+        options.onOutputFile(located)
+      }
+    }
+
     try {
       await runWithArgs(this.buildArgs(request, options.settings, { relaxed: false, platform }))
+      finalizeOutput()
     } catch (error) {
       const details = (error as Error).message
 
       if (this.shouldRetryWithRelaxedSelector(details, platform)) {
         try {
           await runWithArgs(this.buildArgs(request, options.settings, { relaxed: true, platform }))
+          finalizeOutput()
           return
         } catch (retryError) {
           const normalized = this.normalizeYtDlpError((retryError as Error).message)
@@ -251,6 +269,45 @@ export class YtDlpService {
 
       const normalized = this.normalizeYtDlpError(details)
       throw new YtDlpDownloadError(normalized.message, normalized.permanent)
+    }
+  }
+
+  // Find the real output file in the folder by the known filename stem (read from
+  // the filesystem so emoji/special chars are preserved). Returns null when the
+  // stem is unknown (fallback template) so the caller keeps the stdout-parsed path.
+  private locateFinalOutput(request: DownloadRequest, settings: AppSettings): string | null {
+    const stem = this.sanitizeFileStem(request.title)
+    if (!stem) {
+      return null
+    }
+
+    const outputDir = request.outputDir?.trim() || settings.outputDir
+    const prefix = `${stem}.`
+
+    try {
+      const candidates = readdirSync(outputDir).filter(
+        (name) =>
+          name.startsWith(prefix)
+          && !name.endsWith('.part')
+          && !name.endsWith('.ytdl')
+          && !/\.f\d+\.[a-z0-9]+$/i.test(name), // skip leftover fragment files
+      )
+      if (candidates.length === 0) {
+        return null
+      }
+
+      let best = candidates[0]
+      let bestTime = -1
+      for (const name of candidates) {
+        const mtime = statSync(path.join(outputDir, name)).mtimeMs
+        if (mtime >= bestTime) {
+          bestTime = mtime
+          best = name
+        }
+      }
+      return path.join(outputDir, best)
+    } catch {
+      return null
     }
   }
 
@@ -294,6 +351,11 @@ export class YtDlpService {
     const outputDir = request.outputDir?.trim() || settings.outputDir
     const outputTemplate = this.buildOutputTemplate(request.title)
 
+    // YouTube serves large fragmented DASH streams (parallelize aggressively).
+    // Instagram/Facebook are rate-limit sensitive, so keep fewer parallel
+    // fragments to avoid 429 blocks; TikTok is usually a single file anyway.
+    const fragmentConcurrency = options.platform === 'youtube' ? '8' : '4'
+
     const args = [
       '--newline',
       '--no-playlist',
@@ -301,6 +363,17 @@ export class YtDlpService {
       String(settings.maxRetries),
       '--fragment-retries',
       String(settings.maxRetries),
+      // Retry transient extraction failures (reduces "could not extract" errors).
+      '--extractor-retries',
+      '3',
+      // Retry transient file locks (e.g. antivirus scanning the .part file).
+      '--file-access-retries',
+      '3',
+      // Download DASH/HLS fragments in parallel to better use bandwidth.
+      '--concurrent-fragments',
+      fragmentConcurrency,
+      // Force IPv4 — avoids throttling/timeouts common on dual-stack networks.
+      '--force-ipv4',
       '--socket-timeout',
       '30',
       '--paths',
@@ -310,7 +383,7 @@ export class YtDlpService {
       '--windows-filenames',
     ]
 
-    const ffmpegLocation = this.resolveFfmpegLocation()
+    const ffmpegLocation = resolveFfmpegLocation()
     if (ffmpegLocation) {
       args.push('--ffmpeg-location', ffmpegLocation)
     }
@@ -322,23 +395,12 @@ export class YtDlpService {
       args.push('--cookies-from-browser', settings.cookiesBrowser)
     }
 
-    this.pushJavaScriptRuntimeArgs(args)
+    pushJsRuntimeArgs(args)
     this.pushRequestArgs(args, request, settings.defaultFormat, options)
 
     args.push(request.url)
 
     return args
-  }
-
-  private pushJavaScriptRuntimeArgs(args: string[]): void {
-    const runtimeSpec = this.resolveNodeRuntimeSpec()
-    if (runtimeSpec) {
-      args.push('--js-runtimes', runtimeSpec)
-      return
-    }
-
-    // Fallback: allow yt-dlp to discover node from PATH.
-    args.push('--js-runtimes', 'node')
   }
 
   private pushRequestArgs(
@@ -486,37 +548,6 @@ export class YtDlpService {
     return null
   }
 
-  private resolveNodeRuntimeSpec(): string | null {
-    const fromEnv = process.env.YTVIBEZ_NODE_PATH?.trim()
-    if (fromEnv) {
-      return `node:${fromEnv}`
-    }
-
-    const bundledNode = this.resolveBundledNodePath()
-    if (bundledNode) {
-      return `node:${bundledNode}`
-    }
-
-    const whichCommand = process.platform === 'win32' ? 'where' : 'which'
-    const probe = spawnSync(whichCommand, ['node'], {
-      encoding: 'utf8',
-      windowsHide: true,
-    })
-
-    if (probe.status === 0 && probe.stdout) {
-      const firstLine = probe.stdout
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .find(Boolean)
-
-      if (firstLine) {
-        return `node:${firstLine}`
-      }
-    }
-
-    return null
-  }
-
   private normalizeYtDlpError(raw: string): { message: string; permanent: boolean } {
     const details = this.dedupeErrorLines(raw)
 
@@ -612,54 +643,12 @@ export class YtDlpService {
     return platform === 'instagram' || platform === 'facebook' || platform === 'tiktok'
   }
 
-  private resolveExecutablePath(): string {
-    const cwdBinary = path.join(process.cwd(), 'bin', 'yt-dlp.exe')
-    if (existsSync(cwdBinary)) {
-      return cwdBinary
-    }
-
-    const resourcesBinary = path.join(process.resourcesPath, 'bin', 'yt-dlp.exe')
-    if (existsSync(resourcesBinary)) {
-      return resourcesBinary
-    }
-
-    return 'yt-dlp'
-  }
-
-  private resolveBundledNodePath(): string | null {
-    const cwdNode = path.join(process.cwd(), 'bin', 'node.exe')
-    if (existsSync(cwdNode)) {
-      return cwdNode
-    }
-
-    const resourcesNode = path.join(process.resourcesPath, 'bin', 'node.exe')
-    if (existsSync(resourcesNode)) {
-      return resourcesNode
-    }
-
-    return null
-  }
-
-  private resolveFfmpegLocation(): string | null {
-    const cwdDir = path.join(process.cwd(), 'bin')
-    if (existsSync(path.join(cwdDir, 'ffmpeg.exe'))) {
-      return cwdDir
-    }
-
-    const resourcesDir = path.join(process.resourcesPath, 'bin')
-    if (existsSync(path.join(resourcesDir, 'ffmpeg.exe'))) {
-      return resourcesDir
-    }
-
-    return null
-  }
-
   getActiveExecutablePath(): string {
-    return this.resolveExecutablePath()
+    return resolveYtDlpPath()
   }
 
   getNodeRuntimePath(): string | null {
-    const spec = this.resolveNodeRuntimeSpec()
+    const spec = resolveNodeRuntimeSpec()
     return spec ? spec.replace(/^node:/, '') : null
   }
 

@@ -67,6 +67,7 @@ export interface DownloadTask {
   retryCount: number
   error?: string
   outputFile?: string
+  reused?: boolean
   createdAt: number
   updatedAt: number
   progress: DownloadProgress
@@ -88,6 +89,7 @@ export interface AppSettings {
   cookiesBrowser: CookiesBrowser
   userName: string
   userEmail: string
+  lastVersion: string
 }
 
 export interface QueueControlState {

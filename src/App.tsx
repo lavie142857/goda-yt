@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import type { DragEvent } from 'react'
 import type {
   AppLanguage,
@@ -18,6 +18,7 @@ import type {
   YtDlpUpdateResult,
 } from './shared/contracts'
 import { mergeImportedUrls, parseTextInput } from './lib/url-import'
+import { canonicalizeVideoKey } from './lib/video-key'
 import { getMessages, type Messages } from './lib/i18n'
 import './App.css'
 
@@ -412,21 +413,6 @@ function buildDownloadFileName(video: StagedVideo, selectedQuality: VideoQuality
   return appendTagIfMissing(baseTitle, qualityTag)
 }
 
-function normalizeUrlForCompare(url: string): string {
-  const trimmed = url.trim()
-  if (!trimmed) {
-    return ''
-  }
-
-  try {
-    const parsed = new URL(trimmed)
-    parsed.hash = ''
-    return parsed.toString()
-  } catch {
-    return trimmed
-  }
-}
-
 function formatDateTime(timestamp: number | null, t: Messages): string {
   if (!timestamp) {
     return t.never
@@ -456,12 +442,126 @@ function needsLogin(rawError: string): boolean {
   )
 }
 
+function computeReorderTarget(
+  queue: DownloadTask[],
+  taskId: string,
+  direction: 'up' | 'down',
+): string | null {
+  const reorderable = queue.filter((item) => !isTerminalStatus(item.status))
+  const index = reorderable.findIndex((item) => item.id === taskId)
+  if (index < 0) {
+    return null
+  }
+
+  const targetIndex = direction === 'up' ? index - 1 : index + 1
+  if (targetIndex < 0 || targetIndex >= reorderable.length) {
+    return null
+  }
+
+  return reorderable[targetIndex]?.id ?? null
+}
+
+interface QueueRowProps {
+  id: string
+  status: DownloadStatus
+  percent: number
+  speed: string
+  eta: string
+  error?: string
+  outputFile?: string
+  reused?: boolean
+  title: string
+  thumbnail?: string | null
+  platform: DownloadTask['platform']
+  isDragging: boolean
+  canMoveUp: boolean
+  canMoveDown: boolean
+  showLoginHint: boolean
+  t: Messages
+  onDragStart: (event: DragEvent<HTMLElement>, id: string, status: DownloadStatus) => void
+  onDragEnd: () => void
+  onDragOver: (event: DragEvent<HTMLElement>, id: string) => void
+  onDrop: (id: string) => void
+  onMoveUp: (id: string) => void
+  onMoveDown: (id: string) => void
+  onCancel: (id: string) => void
+  onOpenFolder: (id: string) => void
+  onLoginHint: () => void
+}
+
+// Memoized so progress ticks (every 250ms) only re-render the rows whose data
+// actually changed, not the whole queue. Props are primitives + stable callbacks.
+const QueueRow = memo(function QueueRow(props: QueueRowProps) {
+  const { id, status, percent, speed, eta, error, outputFile, reused, title, thumbnail, platform, isDragging, canMoveUp, canMoveDown, showLoginHint, t } = props
+  const terminal = isTerminalStatus(status)
+
+  return (
+    <article
+      className={`download-row queue-row status-${status} ${isDragging ? 'dragging' : ''}`}
+      draggable={!terminal}
+      onDragStart={(event) => props.onDragStart(event, id, status)}
+      onDragEnd={props.onDragEnd}
+      onDragOver={(event) => props.onDragOver(event, id)}
+      onDrop={(event) => {
+        event.preventDefault()
+        props.onDrop(id)
+      }}
+    >
+      {!terminal && <span className="queue-drag-handle" aria-hidden="true">⠿</span>}
+      <div className="row-thumb-wrap">
+        {thumbnail ? (
+          <img className="row-thumb" src={thumbnail} alt="" referrerPolicy="no-referrer" loading="lazy" />
+        ) : (
+          <div className="row-thumb placeholder" />
+        )}
+        <span className={`platform-badge ${platformColorClass(platform)}`}>{platformIcon(platform)}</span>
+      </div>
+      <div className="row-content">
+        <div className="row-title">{title}</div>
+        <div className="row-subline">
+          <span className={`platform-tag ${platformColorClass(platform)}`}>{platformLabel(platform, t)}</span>
+          <span>{formatStatusLabel(status, t)}</span>
+          {reused && <span className="reused-tag" title={t.reusedHint}>♻ {t.reusedBadge}</span>}
+          {status === 'active' && <span className="speed-tag">{speed}</span>}
+          {status === 'active' && <span>ETA {eta}</span>}
+          {error && <span className="row-error">{formatQueueError(error, t)}</span>}
+          {error && showLoginHint && (
+            <button className="login-hint-button" type="button" onClick={props.onLoginHint}>
+              {t.loginToDownload}
+            </button>
+          )}
+        </div>
+        {!terminal && (
+          <div className={`desktop-progress ${status === 'active' ? 'progress-animated' : ''}`} aria-hidden="true">
+            <div style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} />
+          </div>
+        )}
+      </div>
+      <div className="row-actions compact-actions">
+        {!terminal && (
+          <>
+            <button className="round-action" type="button" onClick={() => props.onMoveUp(id)} disabled={!canMoveUp} title={t.moveUp}>↑</button>
+            <button className="round-action" type="button" onClick={() => props.onMoveDown(id)} disabled={!canMoveDown} title={t.moveDown}>↓</button>
+          </>
+        )}
+        {(status === 'active' || status === 'pending') && (
+          <button className="round-action danger-action" type="button" onClick={() => props.onCancel(id)} title={t.cancel}>×</button>
+        )}
+        {(status === 'completed' || Boolean(outputFile)) && (
+          <button className="row-open-button" type="button" onClick={() => props.onOpenFolder(id)}>📂 {t.open}</button>
+        )}
+      </div>
+    </article>
+  )
+})
+
 function App() {
   const [urlInput, setUrlInput] = useState('')
   const [showManualInput, setShowManualInput] = useState(false)
   const [stagedVideos, setStagedVideos] = useState<StagedVideo[]>([])
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [renamingIds, setRenamingIds] = useState<Set<string>>(new Set())
+  const [reloadingIds, setReloadingIds] = useState<Set<string>>(new Set())
   const [queue, setQueue] = useState<DownloadTask[]>([])
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [probe, setProbe] = useState<YtDlpProbe | null>(null)
@@ -506,6 +606,64 @@ function App() {
   // (whose message itself lists "requires sign-in" as a likely cause).
   const suggestLogin = (rawError: string): boolean =>
     needsLogin(rawError) || formatQueueError(rawError, t) === t.errGeneric
+
+  // Refs holding the latest values so QueueRow callbacks can stay referentially
+  // stable (empty-deps useCallback) without going stale.
+  const queueRef = useRef<DownloadTask[]>([])
+  const draggedRef = useRef<string | null>(null)
+  const messagesRef = useRef(t)
+  const loginHintRef = useRef<() => void>(() => undefined)
+  queueRef.current = queue
+  draggedRef.current = draggedQueueTaskId
+  messagesRef.current = t
+  loginHintRef.current = () => void openLoginSettings()
+
+  const onRowDragStart = useCallback((event: DragEvent<HTMLElement>, id: string, status: DownloadStatus) => {
+    if (isTerminalStatus(status)) return
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', id)
+    setDraggedQueueTaskId(id)
+  }, [])
+
+  const onRowDragEnd = useCallback(() => setDraggedQueueTaskId(null), [])
+
+  const onRowDragOver = useCallback((event: DragEvent<HTMLElement>, id: string) => {
+    const src = draggedRef.current
+    if (!src || src === id) return
+    event.preventDefault()
+  }, [])
+
+  const onRowDrop = useCallback((id: string) => {
+    const src = draggedRef.current
+    setDraggedQueueTaskId(null)
+    if (!src || src === id) return
+    void window.electronAPI?.reorderDownloads(src, id).then((ok) => {
+      if (!ok) setNotice({ tone: 'error', message: messagesRef.current.cannotReorder })
+    })
+  }, [])
+
+  const onRowReorder = useCallback((id: string, direction: 'up' | 'down') => {
+    const target = computeReorderTarget(queueRef.current, id, direction)
+    if (!target) return
+    void window.electronAPI?.reorderDownloads(id, target).then((ok) => {
+      if (!ok) setNotice({ tone: 'error', message: messagesRef.current.cannotMove })
+    })
+  }, [])
+
+  const onRowMoveUp = useCallback((id: string) => onRowReorder(id, 'up'), [onRowReorder])
+  const onRowMoveDown = useCallback((id: string) => onRowReorder(id, 'down'), [onRowReorder])
+
+  const onRowCancel = useCallback((id: string) => {
+    void window.electronAPI?.cancelDownload(id)
+  }, [])
+
+  const onRowOpenFolder = useCallback((id: string) => {
+    void window.electronAPI?.openDownloadFolder(id).then((ok) => {
+      if (!ok) setNotice({ tone: 'error', message: messagesRef.current.cannotOpenFolder })
+    })
+  }, [])
+
+  const onRowLoginHint = useCallback(() => loginHintRef.current(), [])
   const isSettingsVisible = Boolean(settings?.showSettingsPanel)
   const batchTargets = selectedIds.size > 0
     ? stagedVideos.filter((video) => selectedIds.has(video.id))
@@ -867,11 +1025,21 @@ function App() {
       message: t.readingMetadata(sourceLabel, mergeResult.addedUrls.length),
     })
 
-    try {
-      const metadata = await window.electronAPI.probeVideoMultiple(mergeResult.addedUrls)
-      const nextVideos = metadata.map((item) => createStagedVideo(item))
+    // Show each video the moment its probe finishes, instead of waiting for the
+    // whole batch. Results stream back over an event; a key check keeps it
+    // idempotent (no duplicates even across overlapping pastes).
+    const offResult = window.electronAPI.onProbeResult((metadata) => {
+      const staged = createStagedVideo(metadata)
+      const key = canonicalizeVideoKey(staged.url)
+      setStagedVideos((currentVideos) =>
+        currentVideos.some((video) => canonicalizeVideoKey(video.url) === key)
+          ? currentVideos
+          : [staged, ...currentVideos],
+      )
+    })
 
-      setStagedVideos((currentVideos) => [...nextVideos, ...currentVideos])
+    try {
+      await window.electronAPI.probeVideoStream(mergeResult.addedUrls)
       setNotice(
         summarizeImport(
           sourceLabel,
@@ -887,6 +1055,7 @@ function App() {
         message: t.metadataFailed(formatQueueError(error instanceof Error ? error.message : String(error), t)),
       })
     } finally {
+      offResult()
       setIsAddingUrls(false)
     }
   }
@@ -933,6 +1102,37 @@ function App() {
 
   function updateVideoQuality(id: string, optionId: string): void {
     updateVideo(id, { selectedVariantId: optionId })
+  }
+
+  // Re-probe a single staged link (for ones that errored or only got limited
+  // quality), replacing its metadata in place while keeping its row + custom name.
+  async function reloadVideo(id: string): Promise<void> {
+    if (!hasBridge || reloadingIds.has(id)) return
+    const target = stagedVideos.find((video) => video.id === id)
+    if (!target) return
+
+    setReloadingIds((current) => new Set(current).add(id))
+    try {
+      const metadata = await window.electronAPI.probeVideoInfo(target.url)
+      setStagedVideos((currentVideos) =>
+        currentVideos.map((video) => {
+          if (video.id !== id) return video
+          const fresh = createStagedVideo(metadata)
+          return { ...fresh, id: video.id, fileNameOverride: video.fileNameOverride }
+        }),
+      )
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: t.metadataFailed(formatQueueError(error instanceof Error ? error.message : String(error), t)),
+      })
+    } finally {
+      setReloadingIds((current) => {
+        const next = new Set(current)
+        next.delete(id)
+        return next
+      })
+    }
   }
 
   function removeVideo(id: string): void {
@@ -985,11 +1185,11 @@ function App() {
       return
     }
 
-    const existingUrls = new Set(queue.map((task) => normalizeUrlForCompare(task.request.url)))
+    const existingUrls = new Set(queue.map((task) => canonicalizeVideoKey(task.request.url)))
     const seenIncoming = new Set<string>()
     let duplicateCount = 0
     const queueable = targets.filter((video) => {
-      const normalized = normalizeUrlForCompare(video.url)
+      const normalized = canonicalizeVideoKey(video.url)
       if (!normalized) {
         return false
       }
@@ -1054,25 +1254,9 @@ function App() {
     }
   }
 
-  async function onCancelDownload(id: string): Promise<void> {
-    if (!hasBridge) return
-    await window.electronAPI.cancelDownload(id)
-  }
-
   async function onClearCompleted(): Promise<void> {
     if (!hasBridge) return
     await window.electronAPI.clearCompletedDownloads()
-  }
-
-  async function onOpenDownloadFolder(id: string): Promise<void> {
-    if (!hasBridge) return
-    const opened = await window.electronAPI.openDownloadFolder(id)
-    if (!opened) {
-      setNotice({
-        tone: 'error',
-        message: t.cannotOpenFolder,
-      })
-    }
   }
 
   async function pickOutputDirectory(): Promise<void> {
@@ -1124,38 +1308,6 @@ function App() {
       tone: 'info',
       message: nextState.paused ? t.queuePaused : t.queueResumed,
     })
-  }
-
-  function onQueueDragStart(event: DragEvent<HTMLElement>, task: DownloadTask): void {
-    if (isTerminalStatus(task.status)) {
-      return
-    }
-
-    event.dataTransfer.effectAllowed = 'move'
-    event.dataTransfer.setData('text/plain', task.id)
-    setDraggedQueueTaskId(task.id)
-  }
-
-  async function onQueueDrop(targetTask: DownloadTask): Promise<void> {
-    if (!hasBridge) {
-      setDraggedQueueTaskId(null)
-      return
-    }
-
-    const sourceId = draggedQueueTaskId
-    setDraggedQueueTaskId(null)
-
-    if (!sourceId || sourceId === targetTask.id) {
-      return
-    }
-
-    const ok = await window.electronAPI.reorderDownloads(sourceId, targetTask.id)
-    if (!ok) {
-      setNotice({
-        tone: 'error',
-        message: t.cannotReorder,
-      })
-    }
   }
 
   async function onRunDiagnostics(): Promise<void> {
@@ -1262,37 +1414,7 @@ function App() {
   }
 
   function getReorderTargetId(taskId: string, direction: 'up' | 'down'): string | null {
-    const reorderable = queue.filter((item) => !isTerminalStatus(item.status))
-    const index = reorderable.findIndex((item) => item.id === taskId)
-    if (index < 0) {
-      return null
-    }
-
-    const targetIndex = direction === 'up' ? index - 1 : index + 1
-    if (targetIndex < 0 || targetIndex >= reorderable.length) {
-      return null
-    }
-
-    return reorderable[targetIndex]?.id ?? null
-  }
-
-  async function moveQueueTask(taskId: string, direction: 'up' | 'down'): Promise<void> {
-    if (!hasBridge) {
-      return
-    }
-
-    const targetId = getReorderTargetId(taskId, direction)
-    if (!targetId) {
-      return
-    }
-
-    const ok = await window.electronAPI.reorderDownloads(taskId, targetId)
-    if (!ok) {
-      setNotice({
-        tone: 'error',
-        message: t.cannotMove,
-      })
-    }
+    return computeReorderTarget(queue, taskId, direction)
   }
 
   return (
@@ -1591,6 +1713,13 @@ function App() {
                     <small className="mini-switch-label">{t.mp3}</small>
                   </label>
                   <button
+                    className={`round-action ${(video.error || video.warning || video.probeLimited) ? 'attention' : ''}`}
+                    type="button"
+                    title={t.reloadMetadata}
+                    disabled={reloadingIds.has(video.id)}
+                    onClick={() => void reloadVideo(video.id)}
+                  ><span className={reloadingIds.has(video.id) ? 'spinning-icon' : ''}>↻</span></button>
+                  <button
                     className={`round-action ${renamingIds.has(video.id) || video.fileNameOverride.trim() ? 'active' : ''}`}
                     type="button"
                     title={t.renameFileTitle}
@@ -1608,74 +1737,36 @@ function App() {
             const pendingItems = queue.filter((t) => t.status === 'pending')
             const terminalItems = queue.filter((t) => isTerminalStatus(t.status))
 
-            const renderQueueItem = (task: DownloadTask) => {
-              const canMoveUp = Boolean(getReorderTargetId(task.id, 'up'))
-              const canMoveDown = Boolean(getReorderTargetId(task.id, 'down'))
-
-              return (
-                <article
-                  key={task.id}
-                  className={`download-row queue-row status-${task.status} ${draggedQueueTaskId === task.id ? 'dragging' : ''}`}
-                  draggable={!isTerminalStatus(task.status)}
-                  onDragStart={(event) => onQueueDragStart(event, task)}
-                  onDragEnd={() => setDraggedQueueTaskId(null)}
-                  onDragOver={(event) => {
-                    if (!draggedQueueTaskId || draggedQueueTaskId === task.id) return
-                    event.preventDefault()
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault()
-                    void onQueueDrop(task)
-                  }}
-                >
-                  {!isTerminalStatus(task.status) && (
-                    <span className="queue-drag-handle" aria-hidden="true">⠿</span>
-                  )}
-                  <div className="row-thumb-wrap">
-                    {task.request.thumbnail ? (
-                      <img className="row-thumb" src={task.request.thumbnail} alt="" referrerPolicy="no-referrer" loading="lazy" />
-                    ) : (
-                      <div className="row-thumb placeholder" />
-                    )}
-                    <span className={`platform-badge ${platformColorClass(task.platform)}`}>{platformIcon(task.platform)}</span>
-                  </div>
-                  <div className="row-content">
-                    <div className="row-title">{queueTitle(task, t)}</div>
-                    <div className="row-subline">
-                      <span className={`platform-tag ${platformColorClass(task.platform)}`}>{platformLabel(task.platform, t)}</span>
-                      <span>{formatStatusLabel(task.status, t)}</span>
-                      {task.status === 'active' && <span className="speed-tag">{task.progress.speed}</span>}
-                      {task.status === 'active' && <span>ETA {task.progress.eta}</span>}
-                      {task.error && <span className="row-error">{formatQueueError(task.error, t)}</span>}
-                      {task.error && suggestLogin(task.error) && (
-                        <button className="login-hint-button" type="button" onClick={() => void openLoginSettings()}>
-                          {t.loginToDownload}
-                        </button>
-                      )}
-                    </div>
-                    {!isTerminalStatus(task.status) && (
-                      <div className={`desktop-progress ${task.status === 'active' ? 'progress-animated' : ''}`} aria-hidden="true">
-                        <div style={{ width: `${Math.max(0, Math.min(100, task.progress.percent))}%` }} />
-                      </div>
-                    )}
-                  </div>
-                  <div className="row-actions compact-actions">
-                    {!isTerminalStatus(task.status) && (
-                      <>
-                        <button className="round-action" type="button" onClick={() => void moveQueueTask(task.id, 'up')} disabled={!canMoveUp} title={t.moveUp}>↑</button>
-                        <button className="round-action" type="button" onClick={() => void moveQueueTask(task.id, 'down')} disabled={!canMoveDown} title={t.moveDown}>↓</button>
-                      </>
-                    )}
-                    {(task.status === 'active' || task.status === 'pending') && (
-                      <button className="round-action danger-action" type="button" onClick={() => void onCancelDownload(task.id)} title={t.cancel}>×</button>
-                    )}
-                    {(task.status === 'completed' || Boolean(task.outputFile)) && (
-                      <button className="row-open-button" type="button" onClick={() => void onOpenDownloadFolder(task.id)}>📂 {t.open}</button>
-                    )}
-                  </div>
-                </article>
-              )
-            }
+            const renderQueueItem = (task: DownloadTask) => (
+              <QueueRow
+                key={task.id}
+                id={task.id}
+                status={task.status}
+                percent={task.progress.percent}
+                speed={task.progress.speed}
+                eta={task.progress.eta}
+                error={task.error}
+                outputFile={task.outputFile}
+                reused={task.reused}
+                title={queueTitle(task, t)}
+                thumbnail={task.request.thumbnail}
+                platform={task.platform}
+                isDragging={draggedQueueTaskId === task.id}
+                canMoveUp={Boolean(getReorderTargetId(task.id, 'up'))}
+                canMoveDown={Boolean(getReorderTargetId(task.id, 'down'))}
+                showLoginHint={Boolean(task.error) && suggestLogin(task.error ?? '')}
+                t={t}
+                onDragStart={onRowDragStart}
+                onDragEnd={onRowDragEnd}
+                onDragOver={onRowDragOver}
+                onDrop={onRowDrop}
+                onMoveUp={onRowMoveUp}
+                onMoveDown={onRowMoveDown}
+                onCancel={onRowCancel}
+                onOpenFolder={onRowOpenFolder}
+                onLoginHint={onRowLoginHint}
+              />
+            )
 
             return (
               <>

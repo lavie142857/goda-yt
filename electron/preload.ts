@@ -72,8 +72,17 @@ const api = {
   probeVideoInfo: (url: string): Promise<VideoMetadata> =>
     ipcRenderer.invoke('video:probe-info', url),
 
-  probeVideoMultiple: (urls: string[]): Promise<VideoMetadata[]> =>
-    ipcRenderer.invoke('video:probe-multiple', urls),
+  probeVideoStream: (urls: string[]): Promise<void> =>
+    ipcRenderer.invoke('video:probe-stream', urls),
+
+  onProbeResult: (listener: (metadata: VideoMetadata) => void): (() => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, metadata: VideoMetadata) => {
+      listener(metadata)
+    }
+
+    ipcRenderer.on('video:probe-result', wrapped)
+    return () => ipcRenderer.removeListener('video:probe-result', wrapped)
+  },
 
   onDownloadsChanged: (listener: (tasks: DownloadTask[]) => void): (() => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, tasks: DownloadTask[]) => {

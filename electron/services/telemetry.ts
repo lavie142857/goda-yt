@@ -118,6 +118,23 @@ export function sendInstallTelemetry(settings: AppSettings): boolean {
   return true
 }
 
+// Sent once after the app restarts onto a newer version (update completed).
+export function sendUpdateSuccess(report: { from: string; to: string; userName: string }): void {
+  if (!isConfigured()) {
+    return
+  }
+
+  sendTelegram(
+    [
+      '⬆️ FLASH MEDIA cập nhật thành công',
+      `machine: ${hostname()}`,
+      `from: ${report.from}`,
+      `to: ${report.to}`,
+      `user: ${report.userName?.trim() || '-'}`,
+    ].join('\n'),
+  )
+}
+
 // User-submitted bug report from the Settings "Báo lỗi" form.
 export function sendBugReport(report: { name: string; email: string; message: string; appVersion: string }): void {
   if (!isConfigured()) {
@@ -159,6 +176,15 @@ export function reportError(report: ErrorReport): void {
   const message = report.message.slice(0, 500)
   const signature = `${report.context}|${message.slice(0, 120)}`
   const now = Date.now()
+
+  // Drop entries older than the cooldown so the dedupe map can't grow unbounded.
+  if (recentErrors.size > 200) {
+    for (const [key, ts] of recentErrors) {
+      if (now - ts >= SAME_ERROR_COOLDOWN_MS) {
+        recentErrors.delete(key)
+      }
+    }
+  }
 
   const lastSame = recentErrors.get(signature)
   if (lastSame && now - lastSame < SAME_ERROR_COOLDOWN_MS) {

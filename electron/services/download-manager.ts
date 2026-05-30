@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { copyFile, mkdir } from 'node:fs/promises'
+import path from 'node:path'
 import { detectPlatform } from './platform.js'
+import { HistoryStore } from './history-store.js'
 import { SettingsStore } from './settings-store.js'
+import { canonicalizeVideoKey } from './video-key.js'
 import { YtDlpDownloadError, YtDlpService } from './yt-dlp-service.js'
 import type { DownloadRequest, DownloadResult, DownloadTask, QueueControlState } from '../types.js'
 
@@ -24,8 +29,55 @@ export class DownloadManager {
   constructor(
     private readonly settingsStore: SettingsStore,
     private readonly ytDlpService: YtDlpService,
+    private readonly historyStore: HistoryStore,
     private readonly onQueueChanged: (tasks: DownloadTask[]) => void,
   ) {}
+
+  // History key: same video + same preset/quality/format -> same produced file.
+  // Only YouTube exposes a real quality ladder; on TikTok/Facebook/Instagram the
+  // quality label is unstable across probes (e.g. "Auto" vs "1080p" for the very
+  // same file), so we ignore it there and key by video + preset + format only.
+  private reuseKey(request: DownloadRequest): string {
+    const videoKey = canonicalizeVideoKey(request.url)
+    const quality = detectPlatform(request.url) === 'youtube' ? (request.quality ?? '') : ''
+    return `${videoKey}|${request.preset}|${quality}|${request.format ?? ''}`
+  }
+
+  // If this exact (video, quality) was downloaded before and the file still
+  // exists, copy it into the current output folder instead of re-downloading.
+  private async tryReuseExisting(task: DownloadTask): Promise<boolean> {
+    const key = this.reuseKey(task.request)
+    const entry = this.historyStore.find(key)
+    if (!entry) {
+      return false
+    }
+
+    // Old file is gone (deleted/moved): drop the stale entry and download fresh.
+    if (!existsSync(entry.outputFile)) {
+      this.historyStore.remove(key)
+      return false
+    }
+
+    const targetDir = task.request.outputDir?.trim() || this.settingsStore.get().outputDir
+    const targetPath = path.join(targetDir, path.basename(entry.outputFile))
+
+    try {
+      if (entry.outputFile !== targetPath && !existsSync(targetPath)) {
+        await mkdir(targetDir, { recursive: true })
+        await copyFile(entry.outputFile, targetPath)
+      }
+    } catch {
+      return false // copy failed -> fall back to a normal download
+    }
+
+    task.outputFile = existsSync(targetPath) ? targetPath : entry.outputFile
+    task.reused = true
+    task.status = 'completed'
+    task.progress = { percent: 100, speed: '-', eta: '00:00', stage: 'sao-chep' }
+    task.updatedAt = Date.now()
+    this.historyStore.record(key, task.outputFile)
+    return true
+  }
 
   getQueue(): DownloadTask[] {
     return [...this.tasks.values()].sort((a, b) => {
@@ -91,7 +143,7 @@ export class DownloadManager {
     const rejected: Array<{ url: string; reason: string }> = []
     const knownUrls = new Set(
       [...this.tasks.values()]
-        .map((task) => this.normalizeUrl(task.request.url))
+        .map((task) => canonicalizeVideoKey(task.request.url))
         .filter(Boolean) as string[],
     )
 
@@ -101,7 +153,7 @@ export class DownloadManager {
         continue
       }
 
-      const normalizedUrl = this.normalizeUrl(url)
+      const normalizedUrl = canonicalizeVideoKey(url)
       if (normalizedUrl && knownUrls.has(normalizedUrl)) {
         rejected.push({
           url,
@@ -218,13 +270,26 @@ export class DownloadManager {
   }
 
   private async runTask(task: DownloadTask): Promise<void> {
+    // Mark active synchronously so the scheduler won't re-pick this task while
+    // the (async) reuse check runs. Clear any error from a previous attempt so a
+    // task that later completes (e.g. succeeds on retry) doesn't keep showing it.
     task.status = 'active'
+    task.error = undefined
     task.updatedAt = Date.now()
     task.progress.stage = 'dang-ket-noi'
 
+    // Reserve the concurrency slot synchronously (before any await) so the
+    // scheduler's maxConcurrent check stays correct while the async reuse check runs.
     const controller = new AbortController()
     this.activeControllers.set(task.id, controller)
     this.emitQueueImmediate()
+
+    if (await this.tryReuseExisting(task)) {
+      this.activeControllers.delete(task.id)
+      this.emitQueueImmediate()
+      this.schedule()
+      return
+    }
 
     try {
       await this.ytDlpService.download(task.request, {
@@ -258,6 +323,10 @@ export class DownloadManager {
       task.progress.stage = 'hoan-tat'
       task.progress.percent = 100
       task.updatedAt = Date.now()
+
+      if (task.outputFile) {
+        this.historyStore.record(this.reuseKey(task.request), task.outputFile)
+      }
     } catch (error) {
       const isAborted = (error as Error).message === 'DOWNLOAD_ABORTED'
       if (isAborted) {
@@ -348,20 +417,6 @@ export class DownloadManager {
     }
   }
 
-  private normalizeUrl(url: string): string | null {
-    const trimmed = url.trim()
-    if (!trimmed) {
-      return null
-    }
-
-    try {
-      const parsed = new URL(trimmed)
-      parsed.hash = ''
-      return parsed.toString()
-    } catch {
-      return trimmed
-    }
-  }
 
   private nextQueueIndex(): number {
     let maxIndex = -1

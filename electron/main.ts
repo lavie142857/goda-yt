@@ -7,8 +7,9 @@ import { get as httpsGet } from 'node:https'
 import path from 'node:path'
 import { AuthStore } from './services/auth-store.js'
 import { DownloadManager } from './services/download-manager.js'
+import { HistoryStore } from './services/history-store.js'
 import { SettingsStore } from './services/settings-store.js'
-import { reportError, sendBugReport, sendInstallTelemetry } from './services/telemetry.js'
+import { reportError, sendBugReport, sendInstallTelemetry, sendUpdateSuccess } from './services/telemetry.js'
 import { YtDlpService } from './services/yt-dlp-service.js'
 import { VideoInfoService } from './services/video-info-service.js'
 import type {
@@ -27,6 +28,7 @@ let mainWindow: InstanceType<typeof BrowserWindow> | null = null
 
 const settingsStore = new SettingsStore()
 const authStore = new AuthStore()
+const historyStore = new HistoryStore()
 const ytDlpService = new YtDlpService(
   () => settingsStore.get(),
   () => authStore.getCookiesFilePath(),
@@ -40,6 +42,7 @@ let autoUpdateRunning = false
 const downloadManager = new DownloadManager(
   settingsStore,
   ytDlpService,
+  historyStore,
   (tasks: DownloadTask[]) => {
     detectTaskTransitions(tasks)
 
@@ -121,7 +124,9 @@ function detectTaskTransitions(tasks: DownloadTask[]): void {
       pushNotification({
         level: 'success',
         source: 'download',
-        message: `Download xong: ${title}`,
+        message: task.reused
+          ? `Đã dùng lại bản đã tải (không tải lại): ${title}`
+          : `Download xong: ${title}`,
       })
       continue
     }
@@ -579,8 +584,12 @@ function registerIpcHandlers(): void {
     return videoInfoService.probeVideoInfo(url, settingsStore.get().cookiesBrowser)
   })
 
-  ipcMain.handle('video:probe-multiple', async (_event, urls: string[]) => {
-    return videoInfoService.probeMultiple(urls, settingsStore.get().cookiesBrowser)
+  ipcMain.handle('video:probe-stream', async (_event, urls: string[]) => {
+    await videoInfoService.probeStream(urls, settingsStore.get().cookiesBrowser, (metadata) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('video:probe-result', metadata)
+      }
+    })
   })
 
   ipcMain.handle('window:minimize', () => {
@@ -644,25 +653,59 @@ function setupAppAutoUpdate(): void {
   })
 }
 
-app.whenReady().then(() => {
-  if (process.platform === 'win32') {
-    app.setAppUserModelId('com.flashmedia.app')
-  }
-  registerIpcHandlers()
-  createWindow()
-  void runScheduledAutoUpdate()
-  setupAppAutoUpdate()
-
-  // Guarded internally by a persistent registry marker (written only on a
-  // successful send), so calling every launch safely retries if it failed.
-  sendInstallTelemetry(settingsStore.get())
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
+// Allow only one running instance — a second launch focuses the existing window
+// instead of starting a rival download manager / telemetry / cookie writer.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore()
+      }
+      mainWindow.focus()
     }
   })
-})
+
+  app.whenReady().then(() => {
+    if (process.platform === 'win32') {
+      app.setAppUserModelId('com.flashmedia.app')
+    }
+    registerIpcHandlers()
+    createWindow()
+    void runScheduledAutoUpdate()
+    setupAppAutoUpdate()
+
+    // Guarded internally by a persistent registry marker (written only on a
+    // successful send), so calling every launch safely retries if it failed.
+    sendInstallTelemetry(settingsStore.get())
+
+    // Detect a completed update: the stored version differs from the running one
+    // (and it isn't a first install, where lastVersion is still empty).
+    const currentVersion = app.getVersion()
+    const startupSettings = settingsStore.get()
+    if (
+      startupSettings.telemetryEnabled
+      && startupSettings.lastVersion
+      && startupSettings.lastVersion !== currentVersion
+    ) {
+      sendUpdateSuccess({
+        from: startupSettings.lastVersion,
+        to: currentVersion,
+        userName: startupSettings.userName,
+      })
+    }
+    if (startupSettings.lastVersion !== currentVersion) {
+      settingsStore.update({ lastVersion: currentVersion })
+    }
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow()
+      }
+    })
+  })
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

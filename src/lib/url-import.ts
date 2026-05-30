@@ -1,3 +1,5 @@
+import { canonicalizeVideoKey } from './video-key'
+
 const URL_PATTERN = /https?:\/\/[^\s"',<>]+/gi
 
 const SUPPORTED_HOST_MATCHERS = [
@@ -45,7 +47,7 @@ export async function parseImportFile(file: File): Promise<ParsedInputPayload> {
 }
 
 export function mergeImportedUrls(existingUrls: string[], incomingUrls: string[]): ParsedImportResult {
-  const seen = new Set(existingUrls.map((url) => canonicalizeUrl(url)))
+  const seen = new Set(existingUrls.map((url) => canonicalizeVideoKey(url)))
   const nextUrls: string[] = []
   let duplicateCount = 0
   let invalidCount = 0
@@ -57,7 +59,7 @@ export function mergeImportedUrls(existingUrls: string[], incomingUrls: string[]
       continue
     }
 
-    const key = canonicalizeUrl(trimmed)
+    const key = canonicalizeVideoKey(trimmed)
     if (seen.has(key)) {
       duplicateCount += 1
       continue
@@ -137,17 +139,6 @@ function isSupportedUrl(rawUrl: string): boolean {
     return SUPPORTED_HOST_MATCHERS.some((matcher) => matcher.test(parsed.hostname))
   } catch {
     return false
-  }
-}
-
-function canonicalizeUrl(rawUrl: string): string {
-  try {
-    const parsed = new URL(rawUrl.trim())
-    parsed.hash = ''
-    parsed.hostname = parsed.hostname.toLowerCase()
-    return parsed.toString()
-  } catch {
-    return rawUrl.trim()
   }
 }
 

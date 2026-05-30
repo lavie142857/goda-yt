@@ -1,6 +1,4 @@
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import path from 'node:path'
 import type {
   CookiesBrowser,
   DownloadPlatform,
@@ -8,6 +6,7 @@ import type {
   VideoMetadata,
   VideoQualityOption,
 } from '../types.js'
+import { pushJsRuntimeArgs, resolveYtDlpPath } from './binaries.js'
 import { detectPlatform } from './platform.js'
 
 interface YtDlpFormat {
@@ -46,20 +45,6 @@ interface FallbackMetadata {
   title: string | null
   duration: number | null
   thumbnail: string | null
-}
-
-function resolveYtDlpPath(): string {
-  const localPath = path.join(process.cwd(), 'bin', 'yt-dlp.exe')
-  if (existsSync(localPath)) {
-    return localPath
-  }
-
-  const resourcesPath = path.join(process.resourcesPath, 'bin', 'yt-dlp.exe')
-  if (existsSync(resourcesPath)) {
-    return resourcesPath
-  }
-
-  return 'yt-dlp'
 }
 
 function classifyError(errorOutput: string): { message: string; category: ErrorCategory } {
@@ -181,7 +166,15 @@ export class VideoInfoService {
       }
     }
 
-    const primaryProbe = await this.probeViaYtDlp(url, platform, cookiesBrowser)
+    let primaryProbe = await this.probeViaYtDlp(url, platform, cookiesBrowser)
+
+    // Retry once on a transient failure (network/timeout/rate-limit) after a short
+    // backoff, before giving up to the weaker OpenGraph fallback. This recovers
+    // many failures caused by bursty probing of large pastes.
+    if (!primaryProbe.ok && primaryProbe.errorInfo.category === 'temporary') {
+      await new Promise((r) => setTimeout(r, 700))
+      primaryProbe = await this.probeViaYtDlp(url, platform, cookiesBrowser)
+    }
 
     if (primaryProbe.ok) {
       const filledMetadata = this.fillMissingMetadata(primaryProbe.metadata)
@@ -213,25 +206,27 @@ export class VideoInfoService {
     return this.hydrateThumbnail(fallbackResult)
   }
 
-  async probeMultiple(urls: string[], cookiesBrowser: CookiesBrowser = 'none'): Promise<VideoMetadata[]> {
+  // Probe many URLs and stream each result via onResult the moment it's ready,
+  // so the UI can show videos progressively instead of waiting for the batch.
+  async probeStream(
+    urls: string[],
+    cookiesBrowser: CookiesBrowser,
+    onResult: (metadata: VideoMetadata) => void,
+  ): Promise<void> {
+    // Keep this modest: too many parallel probes trips YouTube rate-limiting on
+    // large pastes, which is worse than a slightly slower batch.
     const concurrency = 3
-    const results: VideoMetadata[] = new Array(urls.length)
     let nextIndex = 0
 
     const runNext = async (): Promise<void> => {
       while (nextIndex < urls.length) {
         const currentIndex = nextIndex++
-        results[currentIndex] = await this.probeVideoInfo(urls[currentIndex], cookiesBrowser)
+        const metadata = await this.probeVideoInfo(urls[currentIndex], cookiesBrowser)
+        onResult(metadata)
       }
     }
 
-    const workers = Array.from(
-      { length: Math.min(concurrency, urls.length) },
-      () => runNext(),
-    )
-
-    await Promise.all(workers)
-    return results
+    await Promise.all(Array.from({ length: Math.min(concurrency, urls.length) }, () => runNext()))
   }
 
   private probeViaYtDlp(
@@ -241,24 +236,39 @@ export class VideoInfoService {
   ): Promise<ProbeResult> {
     return new Promise((resolve) => {
       const executable = resolveYtDlpPath()
+      const cookiesFile = this.getCookiesFile()
+      const usingCookies = Boolean(cookiesFile) || (cookiesBrowser !== 'none')
+
       const args = [
         '--dump-single-json',
         '--skip-download',
         '--no-playlist',
         '--no-warnings',
         '--no-check-certificate',
+        // Fewer transient extraction failures while reading metadata.
+        '--extractor-retries',
+        '2',
+        // Force IPv4 — faster and fewer timeouts on dual-stack networks.
+        '--force-ipv4',
         '--socket-timeout',
-        '10',
+        '8',
       ]
 
-      const cookiesFile = this.getCookiesFile()
+      // Probe only needs the format list + title, not playable URLs, so skipping
+      // YouTube's nsig JS challenge is ~3x faster. BUT it breaks when YouTube
+      // cookies are present ("The page needs to be reloaded"), so only use it when
+      // not authenticated. (youtube-scoped; other sites ignore it.)
+      if (!usingCookies) {
+        args.push('--extractor-args', 'youtube:player_skip=js')
+      }
+
       if (cookiesFile) {
         args.push('--cookies', cookiesFile)
       } else if (cookiesBrowser && cookiesBrowser !== 'none') {
         args.push('--cookies-from-browser', cookiesBrowser)
       }
 
-      this.pushJavaScriptRuntimeArgs(args)
+      pushJsRuntimeArgs(args)
       args.push(url)
 
       const child = spawn(executable, args, {
@@ -278,7 +288,7 @@ export class VideoInfoService {
             category: 'temporary',
           },
         })
-      }, 12000)
+      }, 18000)
 
       child.stdout.on('data', (chunk: Buffer) => {
         output += chunk.toString('utf8')
@@ -782,48 +792,5 @@ export class VideoInfoService {
     }
 
     return normalized
-  }
-
-  private pushJavaScriptRuntimeArgs(args: string[]): void {
-    const runtimeSpec = this.resolveNodeRuntimeSpec()
-    if (runtimeSpec) {
-      args.push('--js-runtimes', runtimeSpec)
-      return
-    }
-
-    args.push('--js-runtimes', 'node')
-  }
-
-  private resolveBundledNodePath(): string | null {
-    const cwdNode = path.join(process.cwd(), 'bin', 'node.exe')
-    if (existsSync(cwdNode)) {
-      return cwdNode
-    }
-
-    const resourcesNode = path.join(process.resourcesPath, 'bin', 'node.exe')
-    if (existsSync(resourcesNode)) {
-      return resourcesNode
-    }
-
-    return null
-  }
-
-  private resolveNodeRuntimeSpec(): string | null {
-    const fromEnv = process.env.YTVIBEZ_NODE_PATH?.trim()
-    if (fromEnv) {
-      return `node:${fromEnv}`
-    }
-
-    const bundledNode = this.resolveBundledNodePath()
-    if (bundledNode) {
-      return `node:${bundledNode}`
-    }
-
-    const pathNode = path.join(process.env.ProgramFiles ?? '', 'nodejs', 'node.exe')
-    if (pathNode && existsSync(pathNode)) {
-      return `node:${pathNode}`
-    }
-
-    return null
   }
 }
