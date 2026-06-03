@@ -96,6 +96,15 @@ function classifyError(errorOutput: string): { message: string; category: ErrorC
     }
   }
 
+  // A hard IP/network block won't clear by retrying immediately — treat as
+  // permanent so we fall back fast instead of wasting retry attempts.
+  if (lower.includes('ip address is blocked') || lower.includes('blocked from accessing')) {
+    return {
+      message: 'Your network is temporarily blocked by the platform. Try later, switch network, or log in.',
+      category: 'permanent',
+    }
+  }
+
   if (lower.includes('429') || lower.includes('too many requests')) {
     return {
       message: 'Rate limited.',
@@ -166,13 +175,19 @@ export class VideoInfoService {
       }
     }
 
+    // Retry transient failures (network/timeout/rate-limit, and TikTok's flaky
+    // "rehydration" extraction) with growing backoff + jitter before falling back
+    // to the weaker OpenGraph metadata. TikTok in particular often needs 2-3 tries.
+    // Jitter spreads concurrent retries so we don't re-trigger rate limiting.
+    const maxAttempts = 3
     let primaryProbe = await this.probeViaYtDlp(url, platform, cookiesBrowser)
-
-    // Retry once on a transient failure (network/timeout/rate-limit) after a short
-    // backoff, before giving up to the weaker OpenGraph fallback. This recovers
-    // many failures caused by bursty probing of large pastes.
-    if (!primaryProbe.ok && primaryProbe.errorInfo.category === 'temporary') {
-      await new Promise((r) => setTimeout(r, 700))
+    for (
+      let attempt = 1;
+      attempt < maxAttempts && !primaryProbe.ok && primaryProbe.errorInfo.category === 'temporary';
+      attempt++
+    ) {
+      const backoff = 500 * attempt + Math.floor(Math.random() * 350)
+      await new Promise((r) => setTimeout(r, backoff))
       primaryProbe = await this.probeViaYtDlp(url, platform, cookiesBrowser)
     }
 
