@@ -29,8 +29,8 @@ let mainWindow: InstanceType<typeof BrowserWindow> | null = null
 const settingsStore = new SettingsStore()
 const authStore = new AuthStore()
 const historyStore = new HistoryStore()
-const ytDlpService = new YtDlpService(() => authStore.getCookiesFilePath())
-const videoInfoService = new VideoInfoService(() => authStore.getCookiesFilePath())
+const ytDlpService = new YtDlpService(() => authStore.materializeCookies())
+const videoInfoService = new VideoInfoService(() => authStore.materializeCookies())
 const notifications: SystemNotification[] = []
 const taskStatusSnapshot = new Map<string, DownloadTask['status']>()
 

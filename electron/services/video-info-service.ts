@@ -7,6 +7,7 @@ import type {
   VideoQualityOption,
 } from '../types.js'
 import { pushJsRuntimeArgs, resolveYtDlpPath } from './binaries.js'
+import type { CookiesHandle } from './auth-store.js'
 import { detectPlatform } from './platform.js'
 
 interface YtDlpFormat {
@@ -155,7 +156,7 @@ function classifyError(errorOutput: string): { message: string; category: ErrorC
 }
 
 export class VideoInfoService {
-  constructor(private readonly getCookiesFile: () => string | null = () => null) {}
+  constructor(private readonly getCookies: () => CookiesHandle | null = () => null) {}
 
   async probeVideoInfo(url: string, cookiesBrowser: CookiesBrowser = 'none'): Promise<VideoMetadata> {
     const platform = detectPlatform(url)
@@ -251,8 +252,19 @@ export class VideoInfoService {
   ): Promise<ProbeResult> {
     return new Promise((resolve) => {
       const executable = resolveYtDlpPath()
-      const cookiesFile = this.getCookiesFile()
-      const usingCookies = Boolean(cookiesFile) || (cookiesBrowser !== 'none')
+      // Decrypt cookies into a temp file just for this probe; deleted on settle.
+      const cookies = this.getCookies()
+      const usingCookies = Boolean(cookies) || (cookiesBrowser !== 'none')
+
+      let settled = false
+      const settle = (result: ProbeResult): void => {
+        if (settled) {
+          return
+        }
+        settled = true
+        cookies?.cleanup()
+        resolve(result)
+      }
 
       const args = [
         '--dump-single-json',
@@ -277,8 +289,8 @@ export class VideoInfoService {
         args.push('--extractor-args', 'youtube:player_skip=js')
       }
 
-      if (cookiesFile) {
-        args.push('--cookies', cookiesFile)
+      if (cookies) {
+        args.push('--cookies', cookies.path)
       } else if (cookiesBrowser && cookiesBrowser !== 'none') {
         args.push('--cookies-from-browser', cookiesBrowser)
       }
@@ -296,7 +308,7 @@ export class VideoInfoService {
 
       const timeout = setTimeout(() => {
         child.kill()
-        resolve({
+        settle({
           ok: false,
           errorInfo: {
             message: 'Timeout.',
@@ -315,7 +327,7 @@ export class VideoInfoService {
 
       child.on('error', (error) => {
         clearTimeout(timeout)
-        resolve({
+        settle({
           ok: false,
           errorInfo: {
             message: error.message || 'Probe failed.',
@@ -328,7 +340,7 @@ export class VideoInfoService {
         clearTimeout(timeout)
 
         if (code !== 0) {
-          resolve({
+          settle({
             ok: false,
             errorInfo: classifyError(errorOutput),
           })
@@ -339,7 +351,7 @@ export class VideoInfoService {
           const parsed: YtDlpInfo = JSON.parse(output)
           const availableQualities = this.normalizeAvailableQualities(parsed.formats ?? [])
 
-          resolve({
+          settle({
             ok: true,
             metadata: {
               url,
@@ -357,7 +369,7 @@ export class VideoInfoService {
             },
           })
         } catch {
-          resolve({
+          settle({
             ok: false,
             errorInfo: {
               message: 'Failed to parse video information.',

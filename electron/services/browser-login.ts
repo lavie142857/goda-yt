@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { get as httpGet } from 'node:http'
 import { createServer } from 'node:net'
 import path from 'node:path'
@@ -138,7 +138,7 @@ function toNetscape(cookies: CdpCookie[]): string {
 // (bypasses Google's embedded-browser block and Chrome's App-Bound Encryption).
 export async function loginAndCaptureCookies(
   profileDir: string,
-  cookiesFilePath: string,
+  persist: (netscapeCookies: string) => void,
 ): Promise<LoginResult> {
   const browserExe = findBrowser()
   if (!browserExe) {
@@ -180,7 +180,7 @@ export async function loginAndCaptureCookies(
 
   const saveCookies = (cookies: CdpCookie[]): void => {
     try {
-      writeFileSync(cookiesFilePath, toNetscape(cookies), 'utf8')
+      persist(toNetscape(cookies))
       captured = true
     } catch {
       // best-effort; a later poll may succeed
