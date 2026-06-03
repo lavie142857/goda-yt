@@ -8,6 +8,7 @@ import {
   resolveYtDlpPath,
 } from './binaries.js'
 import { detectPlatform } from './platform.js'
+import type { CookiesHandle } from './auth-store.js'
 import type {
   AppSettings,
   DownloadPlatform,
@@ -42,7 +43,7 @@ export class YtDlpDownloadError extends Error {
 }
 
 export class YtDlpService {
-  constructor(private readonly getCookiesFile: () => string | null = () => null) {}
+  constructor(private readonly getCookies: () => CookiesHandle | null = () => null) {}
 
   async probe(): Promise<YtDlpProbe> {
     const executable = resolveYtDlpPath()
@@ -302,25 +303,33 @@ export class YtDlpService {
       }
     }
 
+    // Decrypt cookies into a temp file for the lifetime of this download, then
+    // delete the plaintext when finished (cookies are stored encrypted at rest).
+    const cookies = this.getCookies()
+    const cookiesPath = cookies?.path ?? null
     try {
-      await runWithArgs(this.buildArgs(request, options.settings, { relaxed: false, platform }))
-      finalizeOutput()
-    } catch (error) {
-      const details = (error as Error).message
+      try {
+        await runWithArgs(this.buildArgs(request, options.settings, { relaxed: false, platform }, cookiesPath))
+        finalizeOutput()
+      } catch (error) {
+        const details = (error as Error).message
 
-      if (this.shouldRetryWithRelaxedSelector(details, platform)) {
-        try {
-          await runWithArgs(this.buildArgs(request, options.settings, { relaxed: true, platform }))
-          finalizeOutput()
-          return
-        } catch (retryError) {
-          const normalized = this.normalizeYtDlpError((retryError as Error).message)
-          throw new YtDlpDownloadError(normalized.message, normalized.permanent)
+        if (this.shouldRetryWithRelaxedSelector(details, platform)) {
+          try {
+            await runWithArgs(this.buildArgs(request, options.settings, { relaxed: true, platform }, cookiesPath))
+            finalizeOutput()
+            return
+          } catch (retryError) {
+            const normalized = this.normalizeYtDlpError((retryError as Error).message)
+            throw new YtDlpDownloadError(normalized.message, normalized.permanent)
+          }
         }
-      }
 
-      const normalized = this.normalizeYtDlpError(details)
-      throw new YtDlpDownloadError(normalized.message, normalized.permanent)
+        const normalized = this.normalizeYtDlpError(details)
+        throw new YtDlpDownloadError(normalized.message, normalized.permanent)
+      }
+    } finally {
+      cookies?.cleanup()
     }
   }
 
@@ -399,6 +408,7 @@ export class YtDlpService {
     request: DownloadRequest,
     settings: AppSettings,
     options: { relaxed: boolean; platform: DownloadPlatform | null },
+    cookiesPath: string | null,
   ): string[] {
     const outputDir = request.outputDir?.trim() || settings.outputDir
     const outputTemplate = this.buildOutputTemplate(request.title)
@@ -440,9 +450,8 @@ export class YtDlpService {
       args.push('--ffmpeg-location', ffmpegLocation)
     }
 
-    const cookiesFile = this.getCookiesFile()
-    if (cookiesFile) {
-      args.push('--cookies', cookiesFile)
+    if (cookiesPath) {
+      args.push('--cookies', cookiesPath)
     } else if (settings.cookiesBrowser && settings.cookiesBrowser !== 'none') {
       args.push('--cookies-from-browser', settings.cookiesBrowser)
     }

@@ -7,6 +7,7 @@ import type {
   VideoQualityOption,
 } from '../types.js'
 import { pushJsRuntimeArgs, resolveYtDlpPath } from './binaries.js'
+import type { CookiesHandle } from './auth-store.js'
 import { detectPlatform } from './platform.js'
 
 interface YtDlpFormat {
@@ -96,6 +97,15 @@ function classifyError(errorOutput: string): { message: string; category: ErrorC
     }
   }
 
+  // A hard IP/network block won't clear by retrying immediately — treat as
+  // permanent so we fall back fast instead of wasting retry attempts.
+  if (lower.includes('ip address is blocked') || lower.includes('blocked from accessing')) {
+    return {
+      message: 'Your network is temporarily blocked by the platform. Try later, switch network, or log in.',
+      category: 'permanent',
+    }
+  }
+
   if (lower.includes('429') || lower.includes('too many requests')) {
     return {
       message: 'Rate limited.',
@@ -146,7 +156,7 @@ function classifyError(errorOutput: string): { message: string; category: ErrorC
 }
 
 export class VideoInfoService {
-  constructor(private readonly getCookiesFile: () => string | null = () => null) {}
+  constructor(private readonly getCookies: () => CookiesHandle | null = () => null) {}
 
   async probeVideoInfo(url: string, cookiesBrowser: CookiesBrowser = 'none'): Promise<VideoMetadata> {
     const platform = detectPlatform(url)
@@ -166,13 +176,19 @@ export class VideoInfoService {
       }
     }
 
+    // Retry transient failures (network/timeout/rate-limit, and TikTok's flaky
+    // "rehydration" extraction) with growing backoff + jitter before falling back
+    // to the weaker OpenGraph metadata. TikTok in particular often needs 2-3 tries.
+    // Jitter spreads concurrent retries so we don't re-trigger rate limiting.
+    const maxAttempts = 3
     let primaryProbe = await this.probeViaYtDlp(url, platform, cookiesBrowser)
-
-    // Retry once on a transient failure (network/timeout/rate-limit) after a short
-    // backoff, before giving up to the weaker OpenGraph fallback. This recovers
-    // many failures caused by bursty probing of large pastes.
-    if (!primaryProbe.ok && primaryProbe.errorInfo.category === 'temporary') {
-      await new Promise((r) => setTimeout(r, 700))
+    for (
+      let attempt = 1;
+      attempt < maxAttempts && !primaryProbe.ok && primaryProbe.errorInfo.category === 'temporary';
+      attempt++
+    ) {
+      const backoff = 500 * attempt + Math.floor(Math.random() * 350)
+      await new Promise((r) => setTimeout(r, backoff))
       primaryProbe = await this.probeViaYtDlp(url, platform, cookiesBrowser)
     }
 
@@ -236,8 +252,19 @@ export class VideoInfoService {
   ): Promise<ProbeResult> {
     return new Promise((resolve) => {
       const executable = resolveYtDlpPath()
-      const cookiesFile = this.getCookiesFile()
-      const usingCookies = Boolean(cookiesFile) || (cookiesBrowser !== 'none')
+      // Decrypt cookies into a temp file just for this probe; deleted on settle.
+      const cookies = this.getCookies()
+      const usingCookies = Boolean(cookies) || (cookiesBrowser !== 'none')
+
+      let settled = false
+      const settle = (result: ProbeResult): void => {
+        if (settled) {
+          return
+        }
+        settled = true
+        cookies?.cleanup()
+        resolve(result)
+      }
 
       const args = [
         '--dump-single-json',
@@ -262,8 +289,8 @@ export class VideoInfoService {
         args.push('--extractor-args', 'youtube:player_skip=js')
       }
 
-      if (cookiesFile) {
-        args.push('--cookies', cookiesFile)
+      if (cookies) {
+        args.push('--cookies', cookies.path)
       } else if (cookiesBrowser && cookiesBrowser !== 'none') {
         args.push('--cookies-from-browser', cookiesBrowser)
       }
@@ -281,7 +308,7 @@ export class VideoInfoService {
 
       const timeout = setTimeout(() => {
         child.kill()
-        resolve({
+        settle({
           ok: false,
           errorInfo: {
             message: 'Timeout.',
@@ -300,7 +327,7 @@ export class VideoInfoService {
 
       child.on('error', (error) => {
         clearTimeout(timeout)
-        resolve({
+        settle({
           ok: false,
           errorInfo: {
             message: error.message || 'Probe failed.',
@@ -313,7 +340,7 @@ export class VideoInfoService {
         clearTimeout(timeout)
 
         if (code !== 0) {
-          resolve({
+          settle({
             ok: false,
             errorInfo: classifyError(errorOutput),
           })
@@ -324,7 +351,7 @@ export class VideoInfoService {
           const parsed: YtDlpInfo = JSON.parse(output)
           const availableQualities = this.normalizeAvailableQualities(parsed.formats ?? [])
 
-          resolve({
+          settle({
             ok: true,
             metadata: {
               url,
@@ -342,7 +369,7 @@ export class VideoInfoService {
             },
           })
         } catch {
-          resolve({
+          settle({
             ok: false,
             errorInfo: {
               message: 'Failed to parse video information.',
