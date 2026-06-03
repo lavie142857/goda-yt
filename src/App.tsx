@@ -7,6 +7,7 @@ import type {
   DownloadPreset,
   DownloadStatus,
   DownloadTask,
+  NetworkStatus,
   QueueControlState,
   OutputFormat,
   SystemNotification,
@@ -579,6 +580,8 @@ function App() {
   const [bugMsg, setBugMsg] = useState('')
   const [isSendingBug, setIsSendingBug] = useState(false)
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null)
+  const [isOnline, setIsOnline] = useState<boolean>(() => navigator.onLine)
+  const [serverPing, setServerPing] = useState<NetworkStatus | null>(null)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('theme')
     if (saved === 'dark' || saved === 'light') return saved
@@ -725,6 +728,34 @@ function App() {
   const toggleTheme = useCallback(() => {
     setTheme((current) => (current === 'light' ? 'dark' : 'light'))
   }, [])
+
+  // Real-time online/offline status from the OS.
+  useEffect(() => {
+    const update = () => setIsOnline(navigator.onLine)
+    window.addEventListener('online', update)
+    window.addEventListener('offline', update)
+    return () => {
+      window.removeEventListener('online', update)
+      window.removeEventListener('offline', update)
+    }
+  }, [])
+
+  // Poll server latency while the Settings panel is open (and stop when closed).
+  useEffect(() => {
+    if (!hasBridge || !isSettingsVisible) return
+
+    let cancelled = false
+    const ping = async () => {
+      const result = await window.electronAPI.pingNetwork()
+      if (!cancelled) setServerPing(result)
+    }
+    void ping()
+    const timer = setInterval(() => void ping(), 5000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [hasBridge, isSettingsVisible])
 
   const [showKeyboardShortcuts, setShowKeyboardShortcuts] = useState(false)
   const [isMaximized, setIsMaximized] = useState(false)
@@ -2006,6 +2037,37 @@ function App() {
                 </button>
               </div>
 
+              <div className="conn-card">
+                <div className="conn-row">
+                  <span className="conn-label">{t.networkLabelStatus}</span>
+                  <span className={`conn-value ${isOnline ? 'on' : 'off'}`}>
+                    <span className="conn-dot" />
+                    {isOnline ? t.networkOnline : t.networkOffline}
+                  </span>
+                </div>
+                <div className="conn-row">
+                  <span className="conn-label">{t.serverLabel}</span>
+                  <span
+                    className={`conn-value ${
+                      !isOnline || !serverPing?.ok
+                        ? 'off'
+                        : serverPing.latencyMs < 200
+                          ? 'on'
+                          : serverPing.latencyMs < 500
+                            ? 'mid'
+                            : 'off'
+                    }`}
+                  >
+                    <span className="conn-dot" />
+                    {!isOnline || (serverPing && !serverPing.ok)
+                      ? t.serverDown
+                      : serverPing
+                        ? `${serverPing.latencyMs < 200 ? t.serverGood : serverPing.latencyMs < 500 ? t.serverSlow : t.serverVerySlow} · ${serverPing.latencyMs}ms`
+                        : t.serverChecking}
+                  </span>
+                </div>
+              </div>
+
               <div className="settings-auto-row">
                 <label className="switch-line">
                   <input
@@ -2238,47 +2300,44 @@ function App() {
         </div>
       )}
 
-      {/* Forced update overlay — blocks the app until updated */}
-      {updateStatus && (
+      {/* Blocking overlay — ONLY when the update is downloaded and ready to install. */}
+      {updateStatus?.state === 'ready' && (
         <div className="update-overlay">
           <div className="update-box">
             <h2>{t.updateTitle}</h2>
-            {updateStatus.state === 'downloading' && (
-              <>
-                <p>{t.updateDownloading(updateStatus.percent ?? 0)}</p>
-                <div className="update-progress">
-                  <div style={{ width: `${updateStatus.percent ?? 0}%` }} />
-                </div>
-              </>
-            )}
-            {updateStatus.state === 'ready' && (
-              <>
-                <p>{t.updateReady(updateStatus.version ?? '')}</p>
-                <p className="update-desc">{t.updateReadyDesc}</p>
-                <button className="primary-button" type="button" onClick={() => void window.electronAPI.installUpdate()}>
-                  {t.updateNow}
-                </button>
-              </>
-            )}
-            {updateStatus.state === 'error' && (
-              <>
-                <p>{t.updateErrorTitle}</p>
-                <p className="update-desc">{t.updateErrorDesc}</p>
-                <div className="update-error-actions">
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => void window.electronAPI.openReleasesPage()}
-                  >
-                    {t.downloadManual}
-                  </button>
-                  <button className="ghost-button" type="button" onClick={() => setUpdateStatus(null)}>
-                    {t.updateDismiss}
-                  </button>
-                </div>
-              </>
-            )}
+            <p>{t.updateReady(updateStatus.version ?? '')}</p>
+            <p className="update-desc">{t.updateReadyDesc}</p>
+            <button className="primary-button" type="button" onClick={() => void window.electronAPI.installUpdate()}>
+              {t.updateNow}
+            </button>
           </div>
+        </div>
+      )}
+
+      {/* Non-blocking banner while downloading / on error — the app stays usable. */}
+      {(updateStatus?.state === 'downloading' || updateStatus?.state === 'error') && (
+        <div className={`update-banner ${updateStatus.state === 'error' ? 'is-error' : ''}`}>
+          {updateStatus.state === 'downloading' ? (
+            <>
+              <span className="update-banner-text">↓ {t.updateDownloading(updateStatus.percent ?? 0)}</span>
+              <span className="update-banner-bar">
+                <span style={{ width: `${updateStatus.percent ?? 0}%` }} />
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="update-banner-text">⚠ {t.updateErrorTitle}</span>
+              <button className="update-banner-btn" type="button" onClick={() => void window.electronAPI.retryUpdate()}>
+                {t.retry}
+              </button>
+              <button className="update-banner-btn" type="button" onClick={() => void window.electronAPI.openReleasesPage()}>
+                {t.downloadManual}
+              </button>
+              <button className="update-banner-btn ghost" type="button" onClick={() => setUpdateStatus(null)}>
+                {t.updateDismiss}
+              </button>
+            </>
+          )}
         </div>
       )}
 

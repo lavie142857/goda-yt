@@ -29,10 +29,7 @@ let mainWindow: InstanceType<typeof BrowserWindow> | null = null
 const settingsStore = new SettingsStore()
 const authStore = new AuthStore()
 const historyStore = new HistoryStore()
-const ytDlpService = new YtDlpService(
-  () => settingsStore.get(),
-  () => authStore.getCookiesFilePath(),
-)
+const ytDlpService = new YtDlpService(() => authStore.getCookiesFilePath())
 const videoInfoService = new VideoInfoService(() => authStore.getCookiesFilePath())
 const notifications: SystemNotification[] = []
 const taskStatusSnapshot = new Map<string, DownloadTask['status']>()
@@ -510,6 +507,20 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('clipboard:read', () => clipboard.readText())
 
+  ipcMain.handle('network:ping', async () => {
+    const start = Date.now()
+    return new Promise<{ ok: boolean; latencyMs: number }>((resolve) => {
+      const request = httpsGet('https://www.google.com/generate_204', (response) => {
+        const statusCode = response.statusCode ?? 0
+        response.resume()
+        const ok = statusCode >= 200 && statusCode < 400
+        resolve({ ok, latencyMs: ok ? Date.now() - start : -1 })
+      })
+      request.setTimeout(5000, () => request.destroy(new Error('timeout')))
+      request.on('error', () => resolve({ ok: false, latencyMs: -1 }))
+    })
+  })
+
   ipcMain.handle('report:error', async (_event, context: string, message: string) => {
     maybeReportError(`renderer-${context}`, message)
   })
@@ -523,6 +534,14 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('update:install', async () => {
     autoUpdater.quitAndInstall()
+  })
+
+  ipcMain.handle('update:retry', async () => {
+    try {
+      await autoUpdater.checkForUpdates()
+    } catch {
+      // Errors surface via the autoUpdater 'error' event.
+    }
   })
 
   ipcMain.handle('update:open-releases', async () => {
@@ -626,9 +645,24 @@ function setupAppAutoUpdate(): void {
   // Only block the app once an update is actually found. A failed update *check*
   // (offline, GitHub unreachable, no release yet) must NOT lock out a working app.
   let updateActive = false
+  let retryCount = 0
+  const MAX_RETRIES = 5
+
+  const scheduleRetry = () => {
+    if (retryCount >= MAX_RETRIES) {
+      return
+    }
+    retryCount += 1
+    // 30s, 60s, 2m, 4m, capped at 5m.
+    const delay = Math.min(300_000, 30_000 * 2 ** (retryCount - 1))
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(() => undefined)
+    }, delay)
+  }
 
   autoUpdater.on('update-available', (info) => {
     updateActive = true
+    retryCount = 0
     sendUpdateStatus({ state: 'downloading', version: info.version, percent: 0 })
   })
 
@@ -637,15 +671,18 @@ function setupAppAutoUpdate(): void {
   })
 
   autoUpdater.on('update-downloaded', (info) => {
+    retryCount = 0
     sendUpdateStatus({ state: 'ready', version: info.version })
   })
 
   autoUpdater.on('error', (error) => {
     console.error('[FLASH MEDIA] auto-update error:', toErrorMessage(error))
-    // Show the blocking error UI only if a real update download was underway.
+    // Show the (non-blocking) error banner only if a real update was underway,
+    // then auto-retry in the background so a transient failure self-heals.
     if (updateActive) {
       sendUpdateStatus({ state: 'error' })
     }
+    scheduleRetry()
   })
 
   autoUpdater.checkForUpdates().catch((error) => {
@@ -653,9 +690,11 @@ function setupAppAutoUpdate(): void {
   })
 }
 
-// Allow only one running instance — a second launch focuses the existing window
-// instead of starting a rival download manager / telemetry / cookie writer.
-if (!app.requestSingleInstanceLock()) {
+// Allow only one running instance of the *packaged* app — a second launch
+// focuses the existing window. Skipped in dev so a dev build can run alongside an
+// installed copy and rapid restarts don't collide on the lock.
+const isSecondInstance = app.isPackaged && !app.requestSingleInstanceLock()
+if (isSecondInstance) {
   app.quit()
 } else {
   app.on('second-instance', () => {

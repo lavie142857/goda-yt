@@ -1370,6 +1370,56 @@ select option {
   gap: 12px;
 }
 
+.conn-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  padding: 12px 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.conn-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.conn-label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.conn-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.conn-value.on {
+  color: var(--success);
+}
+
+.conn-value.mid {
+  color: var(--warning, #d98a00);
+}
+
+.conn-value.off {
+  color: var(--error);
+}
+
 .auth-card-head {
   display: flex;
   align-items: center;
@@ -1483,19 +1533,6 @@ select option {
   line-height: 1.5;
 }
 
-.update-progress {
-  height: 8px;
-  border-radius: var(--radius-full);
-  background: var(--surface-muted);
-  overflow: hidden;
-}
-
-.update-progress > div {
-  height: 100%;
-  background: var(--accent);
-  transition: width 0.3s var(--ease);
-}
-
 .update-box .primary-button,
 .update-box .secondary-button {
   justify-self: center;
@@ -1503,11 +1540,68 @@ select option {
   min-height: 38px;
 }
 
-.update-error-actions {
+/* Non-blocking update banner (downloading / error) */
+.update-banner {
+  position: fixed;
+  left: 50%;
+  bottom: 52px;
+  transform: translateX(-50%);
+  z-index: 200;
   display: flex;
+  align-items: center;
   gap: 10px;
-  justify-content: center;
-  flex-wrap: wrap;
+  max-width: min(680px, 92vw);
+  padding: 8px 14px;
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  border: 1px solid var(--accent-line, var(--line-strong));
+  box-shadow: var(--shadow-lg, 0 12px 32px rgba(0, 0, 0, 0.35));
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.update-banner.is-error {
+  border-color: var(--error);
+}
+
+.update-banner-text {
+  white-space: nowrap;
+}
+
+.update-banner-bar {
+  position: relative;
+  width: 160px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--surface-muted);
+  overflow: hidden;
+}
+
+.update-banner-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+  transition: width 0.3s var(--ease);
+}
+
+.update-banner-btn {
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.update-banner-btn:hover {
+  border-color: var(--accent);
+}
+
+.update-banner-btn.ghost {
+  border-color: transparent;
+  color: var(--muted);
 }
 
 .smart-profile {

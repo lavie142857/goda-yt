@@ -36,10 +36,7 @@ export class YtDlpDownloadError extends Error {
 }
 
 export class YtDlpService {
-  constructor(
-    private readonly getSettings: () => AppSettings,
-    private readonly getCookiesFile: () => string | null = () => null,
-  ) {}
+  constructor(private readonly getCookiesFile: () => string | null = () => null) {}
 
   async probe(): Promise<YtDlpProbe> {
     const executable = resolveYtDlpPath()
@@ -413,7 +410,30 @@ export class YtDlpService {
     const maxHeight = this.resolveRequestedHeight(request.quality)
 
     if (request.variantSelector?.trim()) {
-      args.push('-f', request.variantSelector.trim())
+      if (requestedFormat === 'mp4') {
+        // MP4 output should always have AAC audio (never Opus) and an editor-
+        // friendly video codec. YouTube only has H.264 up to 1080p; above that it's
+        // VP9/AV1. So: at ≤1080p use H.264 (perfect for Premiere); above 1080p honor
+        // the chosen resolution but prefer VP9 over AV1 (av01 breaks many editors).
+        const height = this.resolveRequestedHeight(request.quality)
+        const hf = height ? `[height<=${height}]` : ''
+
+        if (!height || height <= 1080) {
+          args.push('-S', `${height ? `res:${height},` : ''}vcodec:h264,acodec:aac`)
+          args.push(
+            '-f',
+            `bv*${hf}[vcodec^=avc1]+ba[ext=m4a]/b${hf}[vcodec^=avc1]/bv*${hf}+ba[ext=m4a]/b${hf}`,
+          )
+        } else {
+          args.push('-S', `res:${height},vcodec:vp9,acodec:aac`)
+          args.push(
+            '-f',
+            `bv*${hf}[vcodec^=vp9]+ba[ext=m4a]/bv*${hf}[vcodec^=vp9]+ba/bv*${hf}+ba[ext=m4a]/b${hf}`,
+          )
+        }
+      } else {
+        args.push('-f', request.variantSelector.trim())
+      }
       this.pushContainerArgs(args, requestedFormat)
       return
     }
@@ -643,16 +663,8 @@ export class YtDlpService {
     return platform === 'instagram' || platform === 'facebook' || platform === 'tiktok'
   }
 
-  getActiveExecutablePath(): string {
-    return resolveYtDlpPath()
-  }
-
   getNodeRuntimePath(): string | null {
     const spec = resolveNodeRuntimeSpec()
     return spec ? spec.replace(/^node:/, '') : null
-  }
-
-  getSettingsSnapshot(): AppSettings {
-    return this.getSettings()
   }
 }

@@ -5,6 +5,7 @@ import type {
   DownloadTask,
   QueueControlState,
   StartDownloadInput,
+  NetworkStatus,
   SystemNotification,
   UpdateStatus,
   VideoMetadata,
@@ -31,6 +32,7 @@ interface ElectronAPI {
   listNotifications: () => Promise<SystemNotification[]>
   clearNotifications: () => Promise<SystemNotification[]>
   readClipboard: () => Promise<string>
+  pingNetwork: () => Promise<NetworkStatus>
   reportError: (context: string, message: string) => Promise<void>
   reportBug: (name: string, email: string, message: string) => Promise<boolean>
   getAuthStatus: () => Promise<boolean>
@@ -45,6 +47,7 @@ interface ElectronAPI {
   onDownloadControlStateChanged: (listener: (state: QueueControlState) => void) => () => void
   onNotificationsChanged: (listener: (items: SystemNotification[]) => void) => () => void
   installUpdate: () => Promise<void>
+  retryUpdate: () => Promise<void>
   openReleasesPage: () => Promise<void>
   onUpdateStatus: (listener: (status: UpdateStatus) => void) => () => void
   windowMinimize: () => Promise<void>

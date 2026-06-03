@@ -22,6 +22,11 @@ export interface UpdateStatus {
   percent?: number
 }
 
+export interface NetworkStatus {
+  ok: boolean
+  latencyMs: number
+}
+
 export type ErrorCategory = 'permanent' | 'temporary' | 'system'
 
 export type DownloadStatus =

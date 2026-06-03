@@ -4,6 +4,7 @@ import type {
   DiagnosticsReport,
   DownloadResult,
   DownloadTask,
+  NetworkStatus,
   QueueControlState,
   StartDownloadInput,
   SystemNotification,
@@ -54,6 +55,8 @@ const api = {
   clearNotifications: (): Promise<SystemNotification[]> => ipcRenderer.invoke('notifications:clear'),
 
   readClipboard: (): Promise<string> => ipcRenderer.invoke('clipboard:read'),
+
+  pingNetwork: (): Promise<NetworkStatus> => ipcRenderer.invoke('network:ping'),
 
   reportError: (context: string, message: string): Promise<void> =>
     ipcRenderer.invoke('report:error', context, message),
@@ -121,6 +124,8 @@ const api = {
   },
 
   installUpdate: (): Promise<void> => ipcRenderer.invoke('update:install'),
+
+  retryUpdate: (): Promise<void> => ipcRenderer.invoke('update:retry'),
 
   openReleasesPage: (): Promise<void> => ipcRenderer.invoke('update:open-releases'),
 

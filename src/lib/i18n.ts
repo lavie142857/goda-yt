@@ -130,6 +130,15 @@ export interface Messages {
   runDiagnostics: string
   nodeLabel: string
   networkLabel: string
+  networkLabelStatus: string
+  networkOnline: string
+  networkOffline: string
+  serverLabel: string
+  serverGood: string
+  serverSlow: string
+  serverVerySlow: string
+  serverDown: string
+  serverChecking: string
   generatedAt: string
 
   shortcutsModalTitle: string
@@ -154,6 +163,7 @@ export interface Messages {
   updateErrorDesc: string
   downloadManual: string
   updateDismiss: string
+  retry: string
 
   profileBalanced: string
   profileBalancedDesc: string
@@ -366,6 +376,15 @@ const vi: Messages = {
   runDiagnostics: 'Chạy chẩn đoán',
   nodeLabel: 'Node.js',
   networkLabel: 'Mạng',
+  networkLabelStatus: 'Mạng',
+  networkOnline: 'Trực tuyến',
+  networkOffline: 'Mất kết nối',
+  serverLabel: 'Máy chủ tải',
+  serverGood: 'Kết nối tốt',
+  serverSlow: 'Kết nối chậm',
+  serverVerySlow: 'Rất chậm',
+  serverDown: 'Không kết nối được',
+  serverChecking: 'Đang kiểm tra...',
   generatedAt: 'Thời điểm tạo',
 
   shortcutsModalTitle: '⌨️ Phím tắt',
@@ -390,6 +409,7 @@ const vi: Messages = {
   updateErrorDesc: 'Vui lòng tải bản mới thủ công để tiếp tục sử dụng.',
   downloadManual: 'Tải thủ công',
   updateDismiss: 'Tiếp tục dùng tạm',
+  retry: 'Thử lại',
 
   profileBalanced: 'Cân bằng',
   profileBalancedDesc: 'Thiết lập ổn định cho hầu hết liên kết.',
@@ -602,6 +622,15 @@ const en: Messages = {
   runDiagnostics: 'Run diagnostics',
   nodeLabel: 'Node.js',
   networkLabel: 'Network',
+  networkLabelStatus: 'Network',
+  networkOnline: 'Online',
+  networkOffline: 'Offline',
+  serverLabel: 'Download server',
+  serverGood: 'Good connection',
+  serverSlow: 'Slow connection',
+  serverVerySlow: 'Very slow',
+  serverDown: 'Cannot connect',
+  serverChecking: 'Checking...',
   generatedAt: 'Generated at',
 
   shortcutsModalTitle: '⌨️ Keyboard shortcuts',
@@ -626,6 +655,7 @@ const en: Messages = {
   updateErrorDesc: 'Please download the new version manually to continue.',
   downloadManual: 'Download manually',
   updateDismiss: 'Continue for now',
+  retry: 'Retry',
 
   profileBalanced: 'Balanced',
   profileBalancedDesc: 'Stable settings for most links.',
