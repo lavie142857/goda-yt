@@ -24,6 +24,16 @@ interface CdpCookie {
   session: boolean
 }
 
+// Login pages opened as tabs. CDP Storage.getCookies captures cookies for every
+// domain in the profile, so the user can sign in to whichever platforms they need
+// in one session and a single cookies.txt covers them all.
+const LOGIN_URLS = [
+  'https://www.youtube.com/',
+  'https://www.tiktok.com/login',
+  'https://www.facebook.com/login/',
+  'https://www.instagram.com/accounts/login/',
+]
+
 function findBrowser(): string | null {
   const candidates = [
     path.join(process.env['ProgramFiles'] ?? '', 'Google/Chrome/Application/chrome.exe'),
@@ -132,7 +142,7 @@ export async function loginAndCaptureCookies(
       '--remote-allow-origins=*',
       '--no-first-run',
       '--no-default-browser-check',
-      'https://www.youtube.com/',
+      ...LOGIN_URLS,
     ],
     { windowsHide: false },
   )
