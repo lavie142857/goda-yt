@@ -3,6 +3,7 @@ import type { DragEvent } from 'react'
 import type {
   AppLanguage,
   AppSettings,
+  AuthMode,
   DiagnosticsReport,
   DownloadPreset,
   DownloadStatus,
@@ -430,12 +431,15 @@ function buildDownloadVariantKey(input: {
   format?: OutputFormat
   variantSelector?: string | null
 }): string {
+  const videoKey = canonicalizeVideoKey(input.url)
+  const isYouTube = videoKey.startsWith('youtube:')
+
   return [
-    canonicalizeVideoKey(input.url),
+    videoKey,
     input.preset,
-    input.quality ?? '',
+    isYouTube ? (input.quality ?? '') : '',
     input.format ?? '',
-    input.variantSelector ?? '',
+    isYouTube ? (input.variantSelector ?? '') : '',
   ].join('|')
 }
 
@@ -512,6 +516,7 @@ interface QueueRowProps {
   onMoveUp: (id: string) => void
   onMoveDown: (id: string) => void
   onCancel: (id: string) => void
+  onRetry: (id: string) => void
   onOpenFolder: (id: string) => void
   onLoginHint: () => void
 }
@@ -577,6 +582,11 @@ const QueueRow = memo(function QueueRow(props: QueueRowProps) {
         )}
         {(status === 'active' || status === 'pending') && (
           <button className="round-action danger-action" type="button" onClick={() => props.onCancel(id)} title={t.cancel}>×</button>
+        )}
+        {status === 'failed' && (
+          <button className="row-open-button retry-button" type="button" onClick={() => props.onRetry(id)} title={t.retryDownloadTitle}>
+            {t.retryDownload}
+          </button>
         )}
         {(status === 'completed' || Boolean(outputFile)) && (
           <button className="row-open-button" type="button" onClick={() => props.onOpenFolder(id)}>📂 {t.open}</button>
@@ -690,6 +700,12 @@ function App() {
 
   const onRowCancel = useCallback((id: string) => {
     void window.electronAPI?.cancelDownload(id)
+  }, [])
+
+  const onRowRetry = useCallback((id: string) => {
+    void window.electronAPI?.retryDownload(id).then((ok) => {
+      if (!ok) setNotice({ tone: 'error', message: messagesRef.current.cannotRetryDownload })
+    })
   }, [])
 
   const onRowOpenFolder = useCallback((id: string) => {
@@ -1854,6 +1870,7 @@ function App() {
                 onMoveUp={onRowMoveUp}
                 onMoveDown={onRowMoveDown}
                 onCancel={onRowCancel}
+                onRetry={onRowRetry}
                 onOpenFolder={onRowOpenFolder}
                 onLoginHint={onRowLoginHint}
               />
@@ -2056,6 +2073,20 @@ function App() {
                     {authLoggedIn ? t.loggedIn : t.notLoggedIn}
                   </span>
                 </div>
+
+                <label className="auth-mode-row">
+                  <span>{t.authMode}</span>
+                  <select
+                    value={settings?.authMode ?? 'public'}
+                    onChange={(event) => void updateSettings({ authMode: event.target.value as AuthMode })}
+                    disabled={!settings}
+                  >
+                    <option value="public">{t.authModePublic}</option>
+                    <option value="auto">{t.authModeAuto}</option>
+                    <option value="cookies">{t.authModeCookies}</option>
+                  </select>
+                  <small>{t.authModeNote}</small>
+                </label>
 
                 {authLoggedIn ? (
                   <div className="auth-method">

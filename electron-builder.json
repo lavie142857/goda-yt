@@ -5,6 +5,7 @@
     "buildResources": "public",
     "output": "release"
   },
+  "artifactName": "FLASH-MEDIA-Setup-${version}.${ext}",
   "files": [
     "dist/**/*",
     "dist-electron/**/*",
@@ -40,4 +41,3 @@
     "shortcutName": "FLASH MEDIA"
   }
 }
-

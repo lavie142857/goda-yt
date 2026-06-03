@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { readJsonWithBackup, writeJsonAtomically } from './json-store.js'
-import type { AppLanguage, AppSettings, CookiesBrowser, OutputFormat, YtDlpAutoUpdateMode } from '../types.js'
+import type { AppLanguage, AppSettings, AuthMode, CookiesBrowser, OutputFormat, YtDlpAutoUpdateMode } from '../types.js'
 
 const SETTINGS_FILE = 'settings.json'
 
@@ -50,6 +50,7 @@ export class SettingsStore {
       telemetryEnabled: normalizeBoolean(payload.telemetryEnabled, this.settings.telemetryEnabled),
       telemetryInstallId: this.settings.telemetryInstallId,
       telemetrySent: normalizeBoolean(payload.telemetrySent, this.settings.telemetrySent),
+      authMode: normalizeAuthMode(payload.authMode, this.settings.authMode),
       cookiesBrowser: normalizeCookiesBrowser(payload.cookiesBrowser, this.settings.cookiesBrowser),
       userName: typeof payload.userName === 'string' ? payload.userName.slice(0, 80) : this.settings.userName,
       userEmail: typeof payload.userEmail === 'string' ? payload.userEmail.slice(0, 120) : this.settings.userEmail,
@@ -92,6 +93,7 @@ export class SettingsStore {
           ? parsed.telemetryInstallId
           : defaultSettings.telemetryInstallId,
       telemetrySent: normalizeBoolean(parsed.telemetrySent, defaultSettings.telemetrySent),
+      authMode: normalizeAuthMode(parsed.authMode, defaultSettings.authMode),
       cookiesBrowser: normalizeCookiesBrowser(parsed.cookiesBrowser, defaultSettings.cookiesBrowser),
       userName: typeof parsed.userName === 'string' ? parsed.userName : defaultSettings.userName,
       userEmail: typeof parsed.userEmail === 'string' ? parsed.userEmail : defaultSettings.userEmail,
@@ -124,6 +126,7 @@ function getDefaultSettings(): AppSettings {
     telemetryEnabled: true,
     telemetryInstallId: '',
     telemetrySent: false,
+    authMode: 'public',
     cookiesBrowser: 'none',
     userName: '',
     userEmail: '',
@@ -183,6 +186,17 @@ function normalizeLanguage(
   fallback: AppLanguage,
 ): AppLanguage {
   if (value === 'vi' || value === 'en') {
+    return value
+  }
+
+  return fallback
+}
+
+function normalizeAuthMode(
+  value: AuthMode | undefined,
+  fallback: AuthMode,
+): AuthMode {
+  if (value === 'public' || value === 'auto' || value === 'cookies') {
     return value
   }
 

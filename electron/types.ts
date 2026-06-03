@@ -14,6 +14,8 @@ export type YtDlpAutoUpdateMode = 'weekly' | 'on-start'
 
 export type AppLanguage = 'vi' | 'en'
 
+export type AuthMode = 'public' | 'auto' | 'cookies'
+
 export type CookiesBrowser = 'none' | 'chrome' | 'edge' | 'firefox' | 'brave'
 
 export interface UpdateStatus {
@@ -92,6 +94,7 @@ export interface AppSettings {
   telemetryEnabled: boolean
   telemetryInstallId: string
   telemetrySent: boolean
+  authMode: AuthMode
   cookiesBrowser: CookiesBrowser
   userName: string
   userEmail: string

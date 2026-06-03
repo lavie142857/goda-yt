@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import type {
+  AuthMode,
   CookiesBrowser,
   DownloadPlatform,
   ErrorCategory,
@@ -41,6 +43,10 @@ interface ProbeFailureResult {
 }
 
 type ProbeResult = ProbeSuccessResult | ProbeFailureResult
+
+type ProbeAuthAttempt = 'public' | 'cookies'
+
+type TikTokExtractorProfile = 'web' | 'app-api'
 
 interface FallbackMetadata {
   title: string | null
@@ -158,7 +164,11 @@ function classifyError(errorOutput: string): { message: string; category: ErrorC
 export class VideoInfoService {
   constructor(private readonly getCookies: () => CookiesHandle | null = () => null) {}
 
-  async probeVideoInfo(url: string, cookiesBrowser: CookiesBrowser = 'none'): Promise<VideoMetadata> {
+  async probeVideoInfo(
+    url: string,
+    authMode: AuthMode = 'public',
+    cookiesBrowser: CookiesBrowser = 'none',
+  ): Promise<VideoMetadata> {
     const platform = detectPlatform(url)
     if (!platform) {
       return {
@@ -176,20 +186,30 @@ export class VideoInfoService {
       }
     }
 
-    // Retry transient failures (network/timeout/rate-limit, and TikTok's flaky
-    // "rehydration" extraction) with growing backoff + jitter before falling back
-    // to the weaker OpenGraph metadata. TikTok in particular often needs 2-3 tries.
-    // Jitter spreads concurrent retries so we don't re-trigger rate limiting.
-    const maxAttempts = 3
-    let primaryProbe = await this.probeViaYtDlp(url, platform, cookiesBrowser)
-    for (
-      let attempt = 1;
-      attempt < maxAttempts && !primaryProbe.ok && primaryProbe.errorInfo.category === 'temporary';
-      attempt++
-    ) {
-      const backoff = 500 * attempt + Math.floor(Math.random() * 350)
-      await new Promise((r) => setTimeout(r, backoff))
-      primaryProbe = await this.probeViaYtDlp(url, platform, cookiesBrowser)
+    const probeAttempts = this.buildProbeAuthAttempts(authMode)
+    let primaryProbe: ProbeResult | null = null
+
+    for (let index = 0; index < probeAttempts.length; index++) {
+      const authAttempt = probeAttempts[index]
+      const result = await this.probeViaYtDlpWithRetries(url, platform, cookiesBrowser, authAttempt)
+      primaryProbe = result
+
+      if (result.ok) {
+        break
+      }
+
+      const nextAuthAttempt = probeAttempts[index + 1]
+      if (!this.shouldTryNextProbeAuth(result.errorInfo, authAttempt, nextAuthAttempt)) {
+        break
+      }
+    }
+
+    primaryProbe ??= {
+      ok: false,
+      errorInfo: {
+        message: 'Probe failed.',
+        category: 'temporary',
+      },
     }
 
     if (primaryProbe.ok) {
@@ -226,6 +246,7 @@ export class VideoInfoService {
   // so the UI can show videos progressively instead of waiting for the batch.
   async probeStream(
     urls: string[],
+    authMode: AuthMode,
     cookiesBrowser: CookiesBrowser,
     onResult: (metadata: VideoMetadata) => void,
   ): Promise<void> {
@@ -237,7 +258,7 @@ export class VideoInfoService {
     const runNext = async (): Promise<void> => {
       while (nextIndex < urls.length) {
         const currentIndex = nextIndex++
-        const metadata = await this.probeVideoInfo(urls[currentIndex], cookiesBrowser)
+        const metadata = await this.probeVideoInfo(urls[currentIndex], authMode, cookiesBrowser)
         onResult(metadata)
       }
     }
@@ -249,12 +270,15 @@ export class VideoInfoService {
     url: string,
     platform: DownloadPlatform,
     cookiesBrowser: CookiesBrowser,
+    authAttempt: ProbeAuthAttempt,
+    tiktokProfile: TikTokExtractorProfile = 'web',
   ): Promise<ProbeResult> {
     return new Promise((resolve) => {
       const executable = resolveYtDlpPath()
-      // Decrypt cookies into a temp file just for this probe; deleted on settle.
-      const cookies = this.getCookies()
-      const usingCookies = Boolean(cookies) || (cookiesBrowser !== 'none')
+      // In public mode, never attach stored/browser cookies. Stale cookies are a
+      // common source of false YouTube failures for otherwise public videos.
+      const cookies = authAttempt === 'cookies' ? this.getCookies() : null
+      const usingCookies = authAttempt === 'cookies' && (Boolean(cookies) || (cookiesBrowser !== 'none'))
 
       let settled = false
       const settle = (result: ProbeResult): void => {
@@ -281,21 +305,14 @@ export class VideoInfoService {
         '8',
       ]
 
-      // Probe only needs the format list + title, not playable URLs, so skipping
-      // YouTube's nsig JS challenge is ~3x faster. BUT it breaks when YouTube
-      // cookies are present ("The page needs to be reloaded"), so only use it when
-      // not authenticated. (youtube-scoped; other sites ignore it.)
-      if (!usingCookies) {
-        args.push('--extractor-args', 'youtube:player_skip=js')
-      }
-
-      if (cookies) {
+      if (usingCookies && cookies) {
         args.push('--cookies', cookies.path)
-      } else if (cookiesBrowser && cookiesBrowser !== 'none') {
+      } else if (usingCookies && cookiesBrowser && cookiesBrowser !== 'none') {
         args.push('--cookies-from-browser', cookiesBrowser)
       }
 
       pushJsRuntimeArgs(args)
+      this.pushTikTokExtractorArgs(args, platform, tiktokProfile)
       args.push(url)
 
       const child = spawn(executable, args, {
@@ -379,6 +396,100 @@ export class VideoInfoService {
         }
       })
     })
+  }
+
+  private async probeViaYtDlpWithRetries(
+    url: string,
+    platform: DownloadPlatform,
+    cookiesBrowser: CookiesBrowser,
+    authAttempt: ProbeAuthAttempt,
+  ): Promise<ProbeResult> {
+    // Retry transient failures (network/timeout/rate-limit, and TikTok's flaky
+    // "rehydration" extraction) with growing backoff + jitter before falling back
+    // to the weaker OpenGraph metadata. TikTok gets an app API profile because the
+    // public webpage intermittently omits the rehydration JSON.
+    const profiles: TikTokExtractorProfile[] = platform === 'tiktok'
+      ? ['app-api', 'app-api', 'web', 'app-api']
+      : ['web', 'web', 'web']
+
+    let result: ProbeResult | null = null
+    for (let attempt = 0; attempt < profiles.length; attempt++) {
+      if (attempt > 0) {
+        const backoff = 450 * attempt + Math.floor(Math.random() * 350)
+        await new Promise((r) => setTimeout(r, backoff))
+      }
+
+      result = await this.probeViaYtDlp(url, platform, cookiesBrowser, authAttempt, profiles[attempt])
+      if (result.ok || result.errorInfo.category !== 'temporary') {
+        break
+      }
+    }
+
+    return result ?? {
+      ok: false,
+      errorInfo: {
+        message: 'Probe failed.',
+        category: 'temporary',
+      },
+    }
+  }
+
+  private buildProbeAuthAttempts(authMode: AuthMode): ProbeAuthAttempt[] {
+    if (authMode === 'cookies') {
+      return ['cookies', 'public']
+    }
+
+    if (authMode === 'auto') {
+      return ['public', 'cookies']
+    }
+
+    return ['public']
+  }
+
+  private shouldTryNextProbeAuth(
+    errorInfo: ProbeFailureResult['errorInfo'],
+    current: ProbeAuthAttempt,
+    next: ProbeAuthAttempt | undefined,
+  ): boolean {
+    if (!next) {
+      return false
+    }
+
+    if (current === 'cookies' && next === 'public') {
+      return true
+    }
+
+    return this.canCookiesHelp(errorInfo.message)
+  }
+
+  private canCookiesHelp(message: string): boolean {
+    return /sign in|authentication required|login required|age verification|age[-_\s]?restricted|private video|members[- ]only|join this channel|cookies|required|empty media response|account is private/i.test(
+      message,
+    )
+  }
+
+  private pushTikTokExtractorArgs(
+    args: string[],
+    platform: DownloadPlatform,
+    profile: TikTokExtractorProfile,
+  ): void {
+    if (platform !== 'tiktok' || profile !== 'app-api') {
+      return
+    }
+
+    args.push(
+      '--extractor-args',
+      `tiktok:api_hostname=api22-normal-c-useast2a.tiktokv.com;device_id=${this.buildTikTokDeviceId()};app_info=`,
+    )
+  }
+
+  private buildTikTokDeviceId(): string {
+    const min = 7250000000000000000n
+    const max = 7325099899999994577n
+    const span = max - min + 1n
+    const random = BigInt(`0x${randomBytes(8).toString('hex')}`)
+
+    return (min + (random % span)).toString()
   }
 
   private normalizeAvailableQualities(formats: YtDlpFormat[]): VideoQualityOption[] {

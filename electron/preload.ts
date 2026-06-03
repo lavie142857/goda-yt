@@ -37,6 +37,8 @@ const api = {
 
   cancelDownload: (id: string): Promise<boolean> => ipcRenderer.invoke('downloads:cancel', id),
 
+  retryDownload: (id: string): Promise<boolean> => ipcRenderer.invoke('downloads:retry', id),
+
   clearCompletedDownloads: (): Promise<boolean> => ipcRenderer.invoke('downloads:clear-completed'),
 
   openDownloadFolder: (id: string): Promise<boolean> => ipcRenderer.invoke('downloads:open-folder', id),

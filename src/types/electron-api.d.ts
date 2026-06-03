@@ -23,6 +23,7 @@ interface ElectronAPI {
   resumeDownloads: () => Promise<QueueControlState>
   reorderDownloads: (sourceId: string, targetId: string) => Promise<boolean>
   cancelDownload: (id: string) => Promise<boolean>
+  retryDownload: (id: string) => Promise<boolean>
   clearCompletedDownloads: () => Promise<boolean>
   openDownloadFolder: (id: string) => Promise<boolean>
   pickOutputDirectory: () => Promise<AppSettings | null>

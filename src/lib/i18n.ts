@@ -59,6 +59,8 @@ export interface Messages {
   moveDown: string
   cancel: string
   open: string
+  retryDownload: string
+  retryDownloadTitle: string
 
   downloadingGroup: (n: number) => string
   pendingGroup: (n: number) => string
@@ -120,6 +122,11 @@ export interface Messages {
   loggedIn: string
   notLoggedIn: string
   loggedInNote: string
+  authMode: string
+  authModePublic: string
+  authModeAuto: string
+  authModeCookies: string
+  authModeNote: string
   methodBrowserTitle: string
   methodBrowserDesc: string
   methodFileTitle: string
@@ -207,6 +214,7 @@ export interface Messages {
   downloadError: string
   cannotAddToQueue: (detail: string) => string
   cannotOpenFolder: string
+  cannotRetryDownload: string
   outputDirUpdated: string
   updateYtDlpFailed: (detail: string) => string
   queuePaused: string
@@ -311,6 +319,8 @@ const vi: Messages = {
   moveDown: 'Di chuyển xuống',
   cancel: 'Hủy',
   open: 'Mở',
+  retryDownload: 'Tải lại',
+  retryDownloadTitle: 'Tải lại mục bị lỗi',
 
   downloadingGroup: (n) => `Đang tải (${n})`,
   pendingGroup: (n) => `Chờ (${n})`,
@@ -369,9 +379,14 @@ const vi: Messages = {
   login: 'Đăng nhập',
   loggingIn: 'Đang mở...',
   logout: 'Đăng xuất',
-  loggedIn: 'Đã đăng nhập',
+  loggedIn: 'Đã lưu cookies',
   notLoggedIn: 'Chưa đăng nhập',
-  loggedInNote: 'Đã lưu cookies đăng nhập. Có thể tải nội dung cần đăng nhập (members-only, giới hạn tuổi...).',
+  loggedInNote: 'Đã lưu cookies đăng nhập. Chế độ Tự động sẽ chỉ dùng cookies khi link public không tải được.',
+  authMode: 'Chế độ tải',
+  authModePublic: 'Công khai (không cookies)',
+  authModeAuto: 'Tự động dùng cookies khi cần',
+  authModeCookies: 'Luôn dùng cookies',
+  authModeNote: 'Mặc định Công khai để video public không bị lỗi do cookies cũ. Chọn Tự động hoặc Luôn dùng cookies cho nội dung cần đăng nhập.',
   methodBrowserTitle: 'Đăng nhập bằng Chrome/Edge',
   methodBrowserDesc: 'Mở trình duyệt thật với các tab YouTube, TikTok, Facebook, Instagram. Đăng nhập nền tảng nào bạn cần rồi đóng cửa sổ — app tự lưu cookies cho tất cả. Nhanh và tiện nhất.',
   methodFileTitle: 'Dùng file cookies.txt',
@@ -459,6 +474,7 @@ const vi: Messages = {
   downloadError: 'Lỗi tải xuống',
   cannotAddToQueue: (detail) => `Không thể thêm vào hàng đợi: ${detail}`,
   cannotOpenFolder: 'Không thể mở thư mục lưu. Hãy kiểm tra lại file hoặc thư mục đầu ra.',
+  cannotRetryDownload: 'Không thể tải lại mục này. Có thể cùng biến thể đang chờ hoặc đang tải.',
   outputDirUpdated: 'Đã cập nhật thư mục lưu.',
   updateYtDlpFailed: (detail) => `Cập nhật yt-dlp thất bại: ${detail}`,
   queuePaused: 'Đã tạm dừng hàng đợi.',
@@ -563,6 +579,8 @@ const en: Messages = {
   moveDown: 'Move down',
   cancel: 'Cancel',
   open: 'Open',
+  retryDownload: 'Retry',
+  retryDownloadTitle: 'Retry this failed download',
 
   downloadingGroup: (n) => `Downloading (${n})`,
   pendingGroup: (n) => `Pending (${n})`,
@@ -621,9 +639,14 @@ const en: Messages = {
   login: 'Log in',
   loggingIn: 'Opening...',
   logout: 'Log out',
-  loggedIn: 'Logged in',
+  loggedIn: 'Cookies saved',
   notLoggedIn: 'Not logged in',
-  loggedInNote: 'Login cookies saved. You can download sign-in-only content (members-only, age-restricted...).',
+  loggedInNote: 'Login cookies saved. Auto mode only uses them when a public download cannot continue.',
+  authMode: 'Download mode',
+  authModePublic: 'Public (no cookies)',
+  authModeAuto: 'Auto cookies when needed',
+  authModeCookies: 'Always use cookies',
+  authModeNote: 'Public is the default so stale cookies cannot break public videos. Use Auto or Always for sign-in-only content.',
   methodBrowserTitle: 'Log in with Chrome/Edge',
   methodBrowserDesc: 'Opens a real browser with tabs for YouTube, TikTok, Facebook, and Instagram. Sign in to whichever you need, close the window, and the app saves cookies for all of them. Fastest and easiest.',
   methodFileTitle: 'Use a cookies.txt file',
@@ -711,6 +734,7 @@ const en: Messages = {
   downloadError: 'Download error',
   cannotAddToQueue: (detail) => `Could not add to queue: ${detail}`,
   cannotOpenFolder: 'Could not open the output folder. Please check the file or output directory.',
+  cannotRetryDownload: 'Could not retry this item. The same variant may already be queued or downloading.',
   outputDirUpdated: 'Output folder updated.',
   updateYtDlpFailed: (detail) => `Failed to update yt-dlp: ${detail}`,
   queuePaused: 'Queue paused.',

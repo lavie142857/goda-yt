@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { randomBytes } from 'node:crypto'
 import { readdirSync, statSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import {
@@ -31,6 +32,10 @@ interface RecodeProgressState {
   timeSeconds: number | null
   speed: { label: string; value: number | null } | null
 }
+
+type DownloadAuthAttempt = 'public' | 'cookies'
+
+type TikTokExtractorProfile = 'web' | 'app-api'
 
 export class YtDlpDownloadError extends Error {
   constructor(
@@ -303,34 +308,105 @@ export class YtDlpService {
       }
     }
 
-    // Decrypt cookies into a temp file for the lifetime of this download, then
-    // delete the plaintext when finished (cookies are stored encrypted at rest).
-    const cookies = this.getCookies()
-    const cookiesPath = cookies?.path ?? null
-    try {
+    const runDownloadAttempt = async (authAttempt: DownloadAuthAttempt): Promise<void> => {
+      // Decrypt cookies only for an authenticated attempt. Public attempts must not
+      // attach cookies or --cookies-from-browser, otherwise stale auth can break
+      // public YouTube videos.
+      const cookies = authAttempt === 'cookies' ? this.getCookies() : null
+      const cookiesPath = cookies?.path ?? null
+
       try {
-        await runWithArgs(this.buildArgs(request, options.settings, { relaxed: false, platform }, cookiesPath))
-        finalizeOutput()
+        const baseProfile = this.getDefaultTikTokExtractorProfile(platform)
+        await runWithArgs(this.buildArgs(
+          request,
+          options.settings,
+          { relaxed: false, platform, authAttempt, tiktokProfile: baseProfile },
+          cookiesPath,
+        ))
       } catch (error) {
-        const details = (error as Error).message
+        let details = (error as Error).message
 
         if (this.shouldRetryWithRelaxedSelector(details, platform)) {
           try {
-            await runWithArgs(this.buildArgs(request, options.settings, { relaxed: true, platform }, cookiesPath))
-            finalizeOutput()
+            await runWithArgs(this.buildArgs(
+              request,
+              options.settings,
+              {
+                relaxed: true,
+                platform,
+                authAttempt,
+                tiktokProfile: this.getDefaultTikTokExtractorProfile(platform),
+              },
+              cookiesPath,
+            ))
             return
           } catch (retryError) {
-            const normalized = this.normalizeYtDlpError((retryError as Error).message)
-            throw new YtDlpDownloadError(normalized.message, normalized.permanent)
+            details = (retryError as Error).message
           }
         }
 
-        const normalized = this.normalizeYtDlpError(details)
-        throw new YtDlpDownloadError(normalized.message, normalized.permanent)
+        if (this.shouldRetryWithTikTokAppApi(details, platform)) {
+          const rescueAttempts = 3
+          for (let rescueAttempt = 1; rescueAttempt <= rescueAttempts; rescueAttempt++) {
+            await this.sleep(450 * rescueAttempt + Math.floor(Math.random() * 300))
+            try {
+              await runWithArgs(this.buildArgs(
+                request,
+                options.settings,
+                { relaxed: false, platform, authAttempt, tiktokProfile: 'app-api' },
+                cookiesPath,
+              ))
+              return
+            } catch (rescueError) {
+              details = (rescueError as Error).message
+
+              if (this.shouldRetryWithRelaxedSelector(details, platform)) {
+                try {
+                  await runWithArgs(this.buildArgs(
+                    request,
+                    options.settings,
+                    { relaxed: true, platform, authAttempt, tiktokProfile: 'app-api' },
+                    cookiesPath,
+                  ))
+                  return
+                } catch (relaxedRescueError) {
+                  details = (relaxedRescueError as Error).message
+                }
+              }
+
+              if (!this.shouldRetryWithTikTokAppApi(details, platform)) {
+                break
+              }
+            }
+          }
+        }
+
+        throw new Error(details)
+      } finally {
+        cookies?.cleanup()
       }
-    } finally {
-      cookies?.cleanup()
     }
+
+    const authAttempts = this.buildDownloadAuthAttempts(options.settings.authMode ?? 'public')
+    let lastError: Error | null = null
+
+    for (let index = 0; index < authAttempts.length; index++) {
+      const authAttempt = authAttempts[index]
+      try {
+        await runDownloadAttempt(authAttempt)
+        finalizeOutput()
+        return
+      } catch (error) {
+        lastError = error as Error
+        const nextAuthAttempt = authAttempts[index + 1]
+        if (!this.shouldTryNextDownloadAuth(lastError.message, authAttempt, nextAuthAttempt)) {
+          break
+        }
+      }
+    }
+
+    const normalized = this.normalizeYtDlpError(lastError?.message ?? 'yt-dlp failed.')
+    throw new YtDlpDownloadError(normalized.message, normalized.permanent)
   }
 
   // Find the real output file in the folder by the known filename stem (read from
@@ -407,7 +483,12 @@ export class YtDlpService {
   private buildArgs(
     request: DownloadRequest,
     settings: AppSettings,
-    options: { relaxed: boolean; platform: DownloadPlatform | null },
+    options: {
+      relaxed: boolean
+      platform: DownloadPlatform | null
+      authAttempt: DownloadAuthAttempt
+      tiktokProfile?: TikTokExtractorProfile
+    },
     cookiesPath: string | null,
   ): string[] {
     const outputDir = request.outputDir?.trim() || settings.outputDir
@@ -450,13 +531,18 @@ export class YtDlpService {
       args.push('--ffmpeg-location', ffmpegLocation)
     }
 
-    if (cookiesPath) {
+    if (options.authAttempt === 'cookies' && cookiesPath) {
       args.push('--cookies', cookiesPath)
-    } else if (settings.cookiesBrowser && settings.cookiesBrowser !== 'none') {
+    } else if (
+      options.authAttempt === 'cookies'
+      && settings.cookiesBrowser
+      && settings.cookiesBrowser !== 'none'
+    ) {
       args.push('--cookies-from-browser', settings.cookiesBrowser)
     }
 
     pushJsRuntimeArgs(args)
+    this.pushTikTokExtractorArgs(args, options.platform, options.tiktokProfile)
     this.pushRequestArgs(args, request, settings.defaultFormat, settings.forceH264, options)
 
     args.push(request.url)
@@ -473,8 +559,9 @@ export class YtDlpService {
   ): void {
     const requestedFormat = request.format ?? defaultFormat
     const maxHeight = this.resolveRequestedHeight(request.quality)
+    const selectorMaxHeight = this.shouldDropHeightOnRelaxed(options) ? null : maxHeight
 
-    if (request.variantSelector?.trim()) {
+    if (request.variantSelector?.trim() && options.platform === 'youtube' && requestedFormat === 'mp4') {
       if (requestedFormat === 'mp4') {
         // MP4 output should always have AAC audio (never Opus) and an editor-
         // friendly video codec. YouTube only has H.264 up to 1080p; above that it's
@@ -518,7 +605,7 @@ export class YtDlpService {
       return
     }
 
-    const selector = this.buildVideoSelector(requestedFormat, maxHeight, options)
+    const selector = this.buildVideoSelector(requestedFormat, selectorMaxHeight, options)
 
     if (request.preset === 'audioMp3') {
       args.push('-f', 'bestaudio/best')
@@ -538,14 +625,47 @@ export class YtDlpService {
       return
     }
 
-    if (maxHeight) {
-      args.push('-S', this.buildSortSelector(maxHeight, options))
-    } else if (!options.relaxed) {
+    if (selectorMaxHeight) {
+      args.push('-S', this.buildSortSelector(selectorMaxHeight, options, requestedFormat))
+    } else if (!options.relaxed && options.platform === 'youtube') {
       args.push('-S', 'codec:h264')
     }
 
     args.push('-f', selector)
     this.pushContainerArgs(args, requestedFormat)
+  }
+
+  private getDefaultTikTokExtractorProfile(platform: DownloadPlatform | null): TikTokExtractorProfile {
+    return platform === 'tiktok' ? 'app-api' : 'web'
+  }
+
+  private pushTikTokExtractorArgs(
+    args: string[],
+    platform: DownloadPlatform | null,
+    profile: TikTokExtractorProfile | undefined,
+  ): void {
+    if (platform !== 'tiktok' || profile !== 'app-api') {
+      return
+    }
+
+    // TikTok's web page often omits the rehydration JSON, which makes yt-dlp fail
+    // intermittently. Supplying app API parameters makes yt-dlp try the app endpoint
+    // first while preserving its normal webpage fallback for web-only posts.
+    args.push(
+      '--extractor-args',
+      `tiktok:api_hostname=api22-normal-c-useast2a.tiktokv.com;device_id=${this.buildTikTokDeviceId()};app_info=`,
+    )
+  }
+
+  private shouldDropHeightOnRelaxed(options: { relaxed: boolean; platform: DownloadPlatform | null }): boolean {
+    return Boolean(
+      options.relaxed
+      && (
+        options.platform === 'instagram'
+        || options.platform === 'facebook'
+        || options.platform === 'tiktok'
+      ),
+    )
   }
 
   private buildVideoSelector(
@@ -555,10 +675,13 @@ export class YtDlpService {
   ): string {
     const heightFilter = maxHeight ? `[height<=${maxHeight}]` : ''
     const prefersCombinedBest =
-      options.relaxed ||
-      options.platform === 'instagram' ||
-      options.platform === 'facebook' ||
-      options.platform === 'tiktok'
+      requestedFormat !== 'webm'
+      && (
+        options.relaxed ||
+        options.platform === 'instagram' ||
+        options.platform === 'facebook' ||
+        options.platform === 'tiktok'
+      )
 
     if (prefersCombinedBest) {
       return `b${heightFilter}/bv*${heightFilter}+ba/best`
@@ -569,7 +692,7 @@ export class YtDlpService {
     }
 
     if (requestedFormat === 'webm') {
-      return `bv*[ext=webm]${heightFilter}+ba[ext=webm]/b[ext=webm]${heightFilter}/b${heightFilter}`
+      return `bv*[ext=webm]${heightFilter}+ba[ext=webm]/b[ext=webm]${heightFilter}`
     }
 
     return `bv*${heightFilter}+ba/b${heightFilter}`
@@ -578,6 +701,7 @@ export class YtDlpService {
   private buildSortSelector(
     maxHeight: number,
     options: { relaxed: boolean; platform: DownloadPlatform | null },
+    requestedFormat: OutputFormat,
   ): string {
     if (
       options.relaxed ||
@@ -585,6 +709,14 @@ export class YtDlpService {
       options.platform === 'facebook' ||
       options.platform === 'tiktok'
     ) {
+      return `res:${maxHeight}`
+    }
+
+    if (requestedFormat === 'webm') {
+      return `res:${maxHeight},codec:vp9`
+    }
+
+    if (requestedFormat === 'mkv') {
       return `res:${maxHeight}`
     }
 
@@ -652,9 +784,10 @@ export class YtDlpService {
     const requestedHeight = this.resolveRequestedHeight(request.quality)
 
     return Boolean(
-      settings.forceH264
-      && requestedFormat === 'mp4'
+      detectPlatform(request.url) === 'youtube'
       && request.variantSelector?.trim()
+      && settings.forceH264
+      && requestedFormat === 'mp4'
       && requestedHeight
       && requestedHeight > 1080,
     )
@@ -767,6 +900,40 @@ export class YtDlpService {
     return `${minutes}:${String(secs).padStart(2, '0')}`
   }
 
+  private buildDownloadAuthAttempts(authMode: AppSettings['authMode']): DownloadAuthAttempt[] {
+    if (authMode === 'cookies') {
+      return ['cookies', 'public']
+    }
+
+    if (authMode === 'auto') {
+      return ['public', 'cookies']
+    }
+
+    return ['public']
+  }
+
+  private shouldTryNextDownloadAuth(
+    raw: string,
+    current: DownloadAuthAttempt,
+    next: DownloadAuthAttempt | undefined,
+  ): boolean {
+    if (!next || raw === 'DOWNLOAD_ABORTED') {
+      return false
+    }
+
+    if (current === 'cookies' && next === 'public') {
+      return true
+    }
+
+    return this.canCookiesHelp(raw)
+  }
+
+  private canCookiesHelp(raw: string): boolean {
+    return /sign in|authentication required|login required|age[-_\s]?restricted|confirm your age|private video|members[- ]only|join this channel|cookies|required|empty media response|account is private|not returning public media/i.test(
+      raw,
+    )
+  }
+
   private normalizeYtDlpError(raw: string): { message: string; permanent: boolean } {
     const details = this.dedupeErrorLines(raw)
 
@@ -790,7 +957,7 @@ export class YtDlpService {
       || /age[-_\s]?restricted/i.test(details)
     ) {
       return {
-        message: 'This media requires login or age verification. The current build only supports public content.',
+        message: 'This media requires login or age verification. Switch Download mode to Auto/Always cookies and log in or import cookies.',
         permanent: true,
       }
     }
@@ -860,6 +1027,29 @@ export class YtDlpService {
     }
 
     return platform === 'instagram' || platform === 'facebook' || platform === 'tiktok'
+  }
+
+  private shouldRetryWithTikTokAppApi(raw: string, platform: DownloadPlatform | null): boolean {
+    if (platform !== 'tiktok' || raw === 'DOWNLOAD_ABORTED') {
+      return false
+    }
+
+    return /unable to extract universal data|unable to extract webpage video data|unable to extract aweme|failed to parse json|no video formats found|video not available, status code 0|http error (?:403|429)|too many requests|timed? ?out|connection|network|incomplete data/i.test(
+      raw,
+    )
+  }
+
+  private buildTikTokDeviceId(): string {
+    const min = 7250000000000000000n
+    const max = 7325099899999994577n
+    const span = max - min + 1n
+    const random = BigInt(`0x${randomBytes(8).toString('hex')}`)
+
+    return (min + (random % span)).toString()
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
   }
 
   getNodeRuntimePath(): string | null {

@@ -39,7 +39,8 @@ export class DownloadManager {
   // same file), so we ignore it there and key by video + preset + format only.
   private reuseKey(request: DownloadRequest): string {
     const videoKey = canonicalizeVideoKey(request.url)
-    const quality = detectPlatform(request.url) === 'youtube' ? (request.quality ?? '') : ''
+    const platform = detectPlatform(request.url)
+    const quality = platform === 'youtube' ? (request.quality ?? '') : ''
     const format = request.format ?? ''
 
     // forceH264 changes the produced file ONLY for >1080p MP4 (VP9 vs re-encoded
@@ -47,19 +48,25 @@ export class DownloadManager {
     // doesn't reuse a wrong-codec cached file. ≤1080p / non-mp4 is unaffected.
     const height = Number(request.quality?.match(/(\d{3,4})/)?.[1] ?? 0)
     const codecTag =
-      format === 'mp4' && height > 1080 ? (this.settingsStore.get().forceH264 ? '|h264' : '|vp9') : ''
+      platform === 'youtube' && format === 'mp4' && height > 1080
+        ? (this.settingsStore.get().forceH264 ? '|h264' : '|vp9')
+        : ''
 
     return `${videoKey}|${request.preset}|${quality}|${format}${codecTag}`
   }
 
   private queueKey(request: DownloadRequest): string {
     const videoKey = canonicalizeVideoKey(request.url)
+    const platform = detectPlatform(request.url)
+    const quality = platform === 'youtube' ? (request.quality ?? '') : ''
+    const variantSelector = platform === 'youtube' ? (request.variantSelector ?? '') : ''
+
     return [
       videoKey,
       request.preset,
-      request.quality ?? '',
+      quality,
       request.format ?? '',
-      request.variantSelector ?? '',
+      variantSelector,
     ].join('|')
   }
 
@@ -255,6 +262,42 @@ export class DownloadManager {
     return true
   }
 
+  retry(id: string): boolean {
+    const task = this.tasks.get(id)
+    if (!task || task.status !== 'failed') {
+      return false
+    }
+
+    const taskKey = this.queueKey(task.request)
+    const hasActiveDuplicate = [...this.tasks.values()].some(
+      (item) =>
+        item.id !== id
+        && (item.status === 'pending' || item.status === 'active')
+        && this.queueKey(item.request) === taskKey,
+    )
+    if (hasActiveDuplicate) {
+      return false
+    }
+
+    task.status = 'pending'
+    task.retryCount = 0
+    task.error = undefined
+    task.outputFile = undefined
+    task.reused = false
+    task.queueIndex = this.nextQueueIndex()
+    task.progress = {
+      percent: 0,
+      speed: '-',
+      eta: '--:--',
+      stage: 'cho-xep-hang',
+    }
+    task.updatedAt = Date.now()
+
+    this.emitQueueImmediate()
+    this.schedule()
+    return true
+  }
+
   clearCompleted(): boolean {
     let removed = false
     for (const [id, task] of this.tasks) {
@@ -388,6 +431,13 @@ export class DownloadManager {
         task.error = normalizedError.message
         task.progress.stage = 'that-bai'
         task.updatedAt = Date.now()
+        console.error('[DownloadManager] task failed', {
+          id: task.id,
+          platform: task.platform,
+          title: task.request.title ?? null,
+          url: task.request.url,
+          error: normalizedError.message,
+        })
       }
     } finally {
       this.activeControllers.delete(task.id)

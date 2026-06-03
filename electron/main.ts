@@ -436,6 +436,10 @@ function registerIpcHandlers(): void {
     return downloadManager.cancel(id)
   })
 
+  ipcMain.handle('downloads:retry', async (_event, id: string) => {
+    return downloadManager.retry(id)
+  })
+
   ipcMain.handle('downloads:clear-completed', async () => {
     return downloadManager.clearCompleted()
   })
@@ -555,6 +559,8 @@ function registerIpcHandlers(): void {
     const result = await authStore.loginViaBrowser()
 
     if (result.ok) {
+      const updated = settingsStore.update({ authMode: 'auto', cookiesBrowser: 'none' })
+      mainWindow?.webContents.send('settings:changed', updated)
       pushNotification({
         level: 'success',
         source: 'system',
@@ -586,6 +592,8 @@ function registerIpcHandlers(): void {
 
     const imported = authStore.importCookiesFile(picked.filePaths[0])
     if (imported) {
+      const updated = settingsStore.update({ authMode: 'auto', cookiesBrowser: 'none' })
+      mainWindow?.webContents.send('settings:changed', updated)
       pushNotification({
         level: 'success',
         source: 'system',
@@ -597,15 +605,19 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('auth:logout', async () => {
     authStore.logout()
+    const updated = settingsStore.update({ authMode: 'public', cookiesBrowser: 'none' })
+    mainWindow?.webContents.send('settings:changed', updated)
     return false
   })
 
   ipcMain.handle('video:probe-info', async (_event, url: string) => {
-    return videoInfoService.probeVideoInfo(url, settingsStore.get().cookiesBrowser)
+    const settings = settingsStore.get()
+    return videoInfoService.probeVideoInfo(url, settings.authMode, settings.cookiesBrowser)
   })
 
   ipcMain.handle('video:probe-stream', async (_event, urls: string[]) => {
-    await videoInfoService.probeStream(urls, settingsStore.get().cookiesBrowser, (metadata) => {
+    const settings = settingsStore.get()
+    await videoInfoService.probeStream(urls, settings.authMode, settings.cookiesBrowser, (metadata) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('video:probe-result', metadata)
       }
