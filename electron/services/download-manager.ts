@@ -40,7 +40,27 @@ export class DownloadManager {
   private reuseKey(request: DownloadRequest): string {
     const videoKey = canonicalizeVideoKey(request.url)
     const quality = detectPlatform(request.url) === 'youtube' ? (request.quality ?? '') : ''
-    return `${videoKey}|${request.preset}|${quality}|${request.format ?? ''}`
+    const format = request.format ?? ''
+
+    // forceH264 changes the produced file ONLY for >1080p MP4 (VP9 vs re-encoded
+    // H.264). Tag the key with the resulting codec there so toggling the setting
+    // doesn't reuse a wrong-codec cached file. ≤1080p / non-mp4 is unaffected.
+    const height = Number(request.quality?.match(/(\d{3,4})/)?.[1] ?? 0)
+    const codecTag =
+      format === 'mp4' && height > 1080 ? (this.settingsStore.get().forceH264 ? '|h264' : '|vp9') : ''
+
+    return `${videoKey}|${request.preset}|${quality}|${format}${codecTag}`
+  }
+
+  private queueKey(request: DownloadRequest): string {
+    const videoKey = canonicalizeVideoKey(request.url)
+    return [
+      videoKey,
+      request.preset,
+      request.quality ?? '',
+      request.format ?? '',
+      request.variantSelector ?? '',
+    ].join('|')
   }
 
   // If this exact (video, quality) was downloaded before and the file still
@@ -141,9 +161,10 @@ export class DownloadManager {
   enqueueMany(downloads: DownloadRequest[]): DownloadResult {
     const accepted: DownloadTask[] = []
     const rejected: Array<{ url: string; reason: string }> = []
-    const knownUrls = new Set(
+    const knownItems = new Set(
       [...this.tasks.values()]
-        .map((task) => canonicalizeVideoKey(task.request.url))
+        .filter((task) => task.status === 'pending' || task.status === 'active')
+        .map((task) => this.queueKey(task.request))
         .filter(Boolean) as string[],
     )
 
@@ -153,11 +174,11 @@ export class DownloadManager {
         continue
       }
 
-      const normalizedUrl = canonicalizeVideoKey(url)
-      if (normalizedUrl && knownUrls.has(normalizedUrl)) {
+      const itemKey = this.queueKey({ ...item, url })
+      if (itemKey && knownItems.has(itemKey)) {
         rejected.push({
           url,
-          reason: 'URL da ton tai trong queue/lich su tai.',
+          reason: 'Bien the tai nay da ton tai trong queue.',
         })
         continue
       }
@@ -186,6 +207,7 @@ export class DownloadManager {
           variantId: item.variantId,
           variantSelector: item.variantSelector,
           outputDir: item.outputDir,
+          duration: item.duration,
         },
         status: 'pending',
         retryCount: 0,
@@ -201,8 +223,8 @@ export class DownloadManager {
 
       this.tasks.set(task.id, task)
       accepted.push(task)
-      if (normalizedUrl) {
-        knownUrls.add(normalizedUrl)
+      if (itemKey) {
+        knownItems.add(itemKey)
       }
     }
 
@@ -270,6 +292,8 @@ export class DownloadManager {
   }
 
   private async runTask(task: DownloadTask): Promise<void> {
+    let shouldScheduleAfterFinish = true
+
     // Mark active synchronously so the scheduler won't re-pick this task while
     // the (async) reuse check runs. Clear any error from a previous attempt so a
     // task that later completes (e.g. succeeds on retry) doesn't keep showing it.
@@ -355,6 +379,7 @@ export class DownloadManager {
           const backoffMs = Math.min(30000, 4000 * 2 ** (task.retryCount - 1))
           this.emitQueue()
           this.activeControllers.delete(task.id)
+          shouldScheduleAfterFinish = false
           setTimeout(() => this.schedule(), backoffMs)
           return
         }
@@ -367,7 +392,9 @@ export class DownloadManager {
     } finally {
       this.activeControllers.delete(task.id)
       this.emitQueueImmediate()
-      this.schedule()
+      if (shouldScheduleAfterFinish) {
+        this.schedule()
+      }
     }
   }
 

@@ -1,33 +1,25 @@
-# YTvibez Quick Start
+# FLASH MEDIA Quick Start
 
 ## Launch Development Server
 
-### Option 1 (Recommended)
+### Option 1
 
 Double-click `quick-start.vbs`.
 
-This opens the development server with a hidden command window. The console window runs in the background, keeping your screen clean while the dev server starts up.
+This opens the development server with a hidden command window.
 
 ### Option 2
 
 Double-click `quick-start.bat`.
 
-This opens the development server with a visible command window showing the build progress and server logs. The window title is automatically renamed to "YTvibez Development Server".
+This opens the development server with a visible command window showing build progress and server logs.
 
 ### Option 3
 
 ```powershell
-cd C:\Users\Admin\Desktop\YTvibez
+cd "C:\Users\Admin\Desktop\GODA YT"
 npm.cmd run dev
 ```
-
-### Option 4
-
-```powershell
-powershell -ExecutionPolicy Bypass -File create-shortcut.ps1
-```
-
-This creates a desktop shortcut that launches the development server.
 
 ## Launch Production App
 
@@ -35,51 +27,49 @@ This creates a desktop shortcut that launches the development server.
 
 Double-click `launch-app.vbs`.
 
-This opens only the app window without any command window. The app automatically builds if needed.
+This opens only the app window without a command window. The launcher builds automatically if needed.
 
 ### Option 2
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File create-shortcut.ps1
+npm.cmd run start
 ```
 
-This creates a desktop shortcut to launch the app directly.
-
-## Portable package
+## Package Windows Installer
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\windows\package-portable.ps1
+npm.cmd run package:win
 ```
 
-This creates `YTvibez-Packaged`. Double-click `YTvibez-Packaged\YTvibez.vbs` to open the packaged app without a command window.
+The installer is generated in `release\`.
 
-## Use the app
+## Use The App
 
-1. Paste supported URLs into the input area, or click `Import file` for `.txt`, `.csv`, `.json`.
-2. You can also drag and drop a file or plain URL text directly into the input card.
-3. **Edit video names**: Click on the "Chỉnh sửa tên file..." field to customize the filename for each video before downloading.
-4. Review the staging list, adjust quality/format, then start the download.
-5. Use the Preferences card to choose the output folder and defaults.
+1. Paste supported URLs into the input area, import a `.txt` / `.csv` / `.json` file, or drag URL text into the app.
+2. Review the staging list and adjust quality, MP3/video mode, or filename before downloading.
+3. Use Settings to choose language, output folder, defaults, login/cookies, yt-dlp update behavior, and diagnostics.
+4. For >1080p MP4 downloads, editor-compatible H.264 recode is enabled by default. Turn it off only when fast download/playback matters more than editor import.
 
-## Public-only behavior
+## Login And Cookies
 
-- Supported platforms stay the same: YouTube, TikTok, Facebook.
-- This build only downloads public content.
-- Videos that require sign-in, age verification, or private access will be marked unsupported.
+- Supported platforms: YouTube, TikTok, Facebook, and Instagram.
+- Public videos download without login.
+- For videos that require sign-in, use the account section in Settings to open the browser login flow or import a `cookies.txt` file.
+- Some private, removed, geo-blocked, or age-restricted videos may still be unavailable depending on the platform.
 
 ## Troubleshooting
 
-### yt-dlp not ready
+### yt-dlp Not Ready
 
-- Check that `bin/yt-dlp.exe` exists, or install `yt-dlp` on `PATH`.
+- Check that `bin\yt-dlp.exe` exists, or install `yt-dlp` on `PATH`.
 
-### Import found nothing
+### Import Found Nothing
 
 - Make sure the file contains full `https://...` URLs for supported hosts.
 - `.json` import scans nested string values, but it still only keeps supported URLs.
 
-### Download issues
+### Download Issues
 
 - Check network connection.
-- Update `yt-dlp`: `.\bin\yt-dlp.exe -U`
-- Ensure `ffmpeg` is installed if you use remux-heavy output formats.
+- Update yt-dlp from Settings, or run `bin\yt-dlp.exe -U`.
+- Ensure `ffmpeg` is bundled or installed if you use merge/remux/recode-heavy output formats.

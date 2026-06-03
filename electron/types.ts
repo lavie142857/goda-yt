@@ -54,6 +54,7 @@ export interface DownloadRequest {
   outputDir?: string
   variantId?: string | null
   variantSelector?: string | null
+  duration?: number | null
 }
 
 export interface DownloadProgress {
@@ -95,6 +96,7 @@ export interface AppSettings {
   userName: string
   userEmail: string
   lastVersion: string
+  forceH264: boolean
 }
 
 export interface QueueControlState {
@@ -110,6 +112,7 @@ export interface DownloadURLWithPreset {
   format?: OutputFormat
   variantId?: string | null
   variantSelector?: string | null
+  duration?: number | null
 }
 
 export interface VideoMetadata {

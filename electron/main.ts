@@ -187,12 +187,13 @@ async function runScheduledAutoUpdate(): Promise<void> {
 
   try {
     const result = await ytDlpService.updateBinary()
-    const updated = settingsStore.update({
-      lastYtDlpAutoUpdateAt: Date.now(),
-    })
-    mainWindow?.webContents.send('settings:changed', updated)
 
     if (result.ok) {
+      const updated = settingsStore.update({
+        lastYtDlpAutoUpdateAt: Date.now(),
+      })
+      mainWindow?.webContents.send('settings:changed', updated)
+
       pushNotification({
         level: 'info',
         source: 'yt-dlp',

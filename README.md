@@ -1,10 +1,10 @@
-# FLASH MEIDA
+# FLASH MEDIA
 
-Desktop downloader for public YouTube, TikTok, Facebook, and Instagram videos using Electron + yt-dlp.
+Desktop downloader for YouTube, TikTok, Facebook, and Instagram videos using Electron + yt-dlp.
 
 ## Current direction
 
-- Public-only downloads. Cookie-based flows were removed.
+- Public downloads by default, with optional browser/cookies login for restricted media.
 - Single dark glass desktop UI with one staging flow.
 - Smart URL intake from paste, drag-and-drop text, or `.txt` / `.csv` / `.json` files.
 - Realtime queue with progress, speed, ETA, retry state, and cancel.
@@ -15,7 +15,8 @@ Desktop downloader for public YouTube, TikTok, Facebook, and Instagram videos us
 - Import URL files and automatically dedupe repeated links.
 - Batch-adjust quality and format before download.
 - Save preferences for default format, output folder, concurrency, and retries.
-- Preserve per-item `quality` and `format` all the way down to yt-dlp arguments.
+- Preserve per-item `quality`, `format`, and duration metadata all the way down to yt-dlp arguments.
+- Editor-compatible mode is enabled by default for >1080p MP4 downloads: the app re-encodes to H.264 and reports real recode progress.
 
 ## Requirements
 
@@ -59,11 +60,11 @@ npm run lint
 - `electron/main.ts`: BrowserWindow setup and IPC handlers
 - `electron/services/download-manager.ts`: queue, retry, cancel
 - `electron/services/yt-dlp-service.ts`: yt-dlp execution and progress parsing
-- `electron/services/video-info-service.ts`: metadata probing and public-only error classification
+- `electron/services/video-info-service.ts`: metadata probing and error classification
 - `electron/services/settings-store.ts`: persisted preferences
 
 ## Notes
 
-- The app does not attempt authenticated or restricted-content downloads.
-- If a video requires login, age verification, or private access, it is treated as unsupported in this build.
+- The app can use imported cookies or a browser login flow when media requires sign-in.
+- Some private, removed, geo-blocked, or age-restricted media may still be unavailable depending on the platform.
 - Keeping concurrency around `2-3` is usually the safest default.

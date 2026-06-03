@@ -58,6 +58,7 @@ export interface DownloadTask {
     outputDir?: string
     variantId?: string | null
     variantSelector?: string | null
+    duration?: number | null
   }
   status: DownloadStatus
   retryCount: number
@@ -91,6 +92,7 @@ export interface AppSettings {
   userName: string
   userEmail: string
   lastVersion: string
+  forceH264: boolean
 }
 
 export interface QueueControlState {
@@ -148,6 +150,7 @@ export interface DownloadURLWithPreset {
   format?: OutputFormat
   variantId?: string | null
   variantSelector?: string | null
+  duration?: number | null
 }
 
 export interface VideoMetadata {

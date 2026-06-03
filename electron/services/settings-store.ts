@@ -1,7 +1,8 @@
 import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import path from 'node:path'
+import { readJsonWithBackup, writeJsonAtomically } from './json-store.js'
 import type { AppLanguage, AppSettings, CookiesBrowser, OutputFormat, YtDlpAutoUpdateMode } from '../types.js'
 
 const SETTINGS_FILE = 'settings.json'
@@ -53,6 +54,7 @@ export class SettingsStore {
       userName: typeof payload.userName === 'string' ? payload.userName.slice(0, 80) : this.settings.userName,
       userEmail: typeof payload.userEmail === 'string' ? payload.userEmail.slice(0, 120) : this.settings.userEmail,
       lastVersion: typeof payload.lastVersion === 'string' ? payload.lastVersion : this.settings.lastVersion,
+      forceH264: normalizeBoolean(payload.forceH264, this.settings.forceH264),
     }
 
     this.ensureOutputDir(next.outputDir)
@@ -63,43 +65,43 @@ export class SettingsStore {
 
   private load(): AppSettings {
     const defaultSettings = getDefaultSettings()
+    const parsed = readJsonWithBackup<Partial<AppSettings>>(this.settingsPath)
 
-    try {
-      const raw = readFileSync(this.settingsPath, 'utf8')
-      const parsed = JSON.parse(raw) as Partial<AppSettings>
-      return {
-        ...defaultSettings,
-        ...parsed,
-        maxConcurrent: clampNumber(parsed.maxConcurrent, 1, 5, defaultSettings.maxConcurrent),
-        maxRetries: clampNumber(parsed.maxRetries, 0, 5, defaultSettings.maxRetries),
-        outputDir: parsed.outputDir?.trim() || defaultSettings.outputDir,
-        defaultFormat: normalizeOutputFormat(parsed.defaultFormat, defaultSettings.defaultFormat),
-        showSettingsPanel: normalizeBoolean(parsed.showSettingsPanel, defaultSettings.showSettingsPanel),
-        autoUpdateYtDlp: normalizeBoolean(parsed.autoUpdateYtDlp, defaultSettings.autoUpdateYtDlp),
-        ytDlpAutoUpdateMode: normalizeAutoUpdateMode(parsed.ytDlpAutoUpdateMode, defaultSettings.ytDlpAutoUpdateMode),
-        lastYtDlpAutoUpdateAt: normalizeNullableTimestamp(
-          parsed.lastYtDlpAutoUpdateAt,
-          defaultSettings.lastYtDlpAutoUpdateAt,
-        ),
-        language: normalizeLanguage(parsed.language, defaultSettings.language),
-        telemetryEnabled: normalizeBoolean(parsed.telemetryEnabled, defaultSettings.telemetryEnabled),
-        telemetryInstallId:
-          typeof parsed.telemetryInstallId === 'string'
-            ? parsed.telemetryInstallId
-            : defaultSettings.telemetryInstallId,
-        telemetrySent: normalizeBoolean(parsed.telemetrySent, defaultSettings.telemetrySent),
-        cookiesBrowser: normalizeCookiesBrowser(parsed.cookiesBrowser, defaultSettings.cookiesBrowser),
-        userName: typeof parsed.userName === 'string' ? parsed.userName : defaultSettings.userName,
-        userEmail: typeof parsed.userEmail === 'string' ? parsed.userEmail : defaultSettings.userEmail,
-        lastVersion: typeof parsed.lastVersion === 'string' ? parsed.lastVersion : defaultSettings.lastVersion,
-      }
-    } catch {
+    if (!parsed || typeof parsed !== 'object') {
       return defaultSettings
+    }
+
+    return {
+      ...defaultSettings,
+      ...parsed,
+      maxConcurrent: clampNumber(parsed.maxConcurrent, 1, 5, defaultSettings.maxConcurrent),
+      maxRetries: clampNumber(parsed.maxRetries, 0, 5, defaultSettings.maxRetries),
+      outputDir: parsed.outputDir?.trim() || defaultSettings.outputDir,
+      defaultFormat: normalizeOutputFormat(parsed.defaultFormat, defaultSettings.defaultFormat),
+      showSettingsPanel: normalizeBoolean(parsed.showSettingsPanel, defaultSettings.showSettingsPanel),
+      autoUpdateYtDlp: normalizeBoolean(parsed.autoUpdateYtDlp, defaultSettings.autoUpdateYtDlp),
+      ytDlpAutoUpdateMode: normalizeAutoUpdateMode(parsed.ytDlpAutoUpdateMode, defaultSettings.ytDlpAutoUpdateMode),
+      lastYtDlpAutoUpdateAt: normalizeNullableTimestamp(
+        parsed.lastYtDlpAutoUpdateAt,
+        defaultSettings.lastYtDlpAutoUpdateAt,
+      ),
+      language: normalizeLanguage(parsed.language, defaultSettings.language),
+      telemetryEnabled: normalizeBoolean(parsed.telemetryEnabled, defaultSettings.telemetryEnabled),
+      telemetryInstallId:
+        typeof parsed.telemetryInstallId === 'string'
+          ? parsed.telemetryInstallId
+          : defaultSettings.telemetryInstallId,
+      telemetrySent: normalizeBoolean(parsed.telemetrySent, defaultSettings.telemetrySent),
+      cookiesBrowser: normalizeCookiesBrowser(parsed.cookiesBrowser, defaultSettings.cookiesBrowser),
+      userName: typeof parsed.userName === 'string' ? parsed.userName : defaultSettings.userName,
+      userEmail: typeof parsed.userEmail === 'string' ? parsed.userEmail : defaultSettings.userEmail,
+      lastVersion: typeof parsed.lastVersion === 'string' ? parsed.lastVersion : defaultSettings.lastVersion,
+      forceH264: normalizeBoolean(parsed.forceH264, defaultSettings.forceH264),
     }
   }
 
   private persist(): void {
-    writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2), 'utf8')
+    writeJsonAtomically(this.settingsPath, this.settings, true)
   }
 
   private ensureOutputDir(outputDir: string): void {
@@ -126,6 +128,7 @@ function getDefaultSettings(): AppSettings {
     userName: '',
     userEmail: '',
     lastVersion: '',
+    forceH264: true,
   }
 }
 

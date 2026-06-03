@@ -83,6 +83,8 @@ export interface Messages {
   updating: string
   updateYtDlp: string
   autoUpdateYtDlp: string
+  forceH264: string
+  forceH264Note: string
   updateSchedule: string
   weekly: string
   onStart: string
@@ -176,6 +178,10 @@ export interface Messages {
 
   statusPending: string
   statusActive: string
+  statusConnecting: string
+  statusRecode: string
+  statusAudioProcessing: string
+  statusCopying: string
   statusCompleted: string
   statusFailed: string
   statusCancelled: string
@@ -329,6 +335,8 @@ const vi: Messages = {
   updating: 'Đang cập nhật',
   updateYtDlp: 'Cập nhật yt-dlp',
   autoUpdateYtDlp: 'Tự cập nhật yt-dlp',
+  forceH264: 'Tương thích Premiere (ép H.264 cho >1080p)',
+  forceH264Note: 'Mặc định bật để file >1080p/4K import tốt vào Premiere/trình biên tập. Có thể tắt nếu ưu tiên tải nhanh và chỉ cần xem (giữ VP9/AV1).',
   updateSchedule: 'Lịch cập nhật',
   weekly: 'Hàng tuần',
   onStart: 'Khi mở app',
@@ -422,6 +430,10 @@ const vi: Messages = {
 
   statusPending: 'Chờ tải',
   statusActive: 'Đang tải',
+  statusConnecting: 'Đang kết nối',
+  statusRecode: 'Đang chuyển mã',
+  statusAudioProcessing: 'Đang xử lý audio',
+  statusCopying: 'Đang sao chép',
   statusCompleted: 'Hoàn tất',
   statusFailed: 'Lỗi',
   statusCancelled: 'Đã hủy',
@@ -575,6 +587,8 @@ const en: Messages = {
   updating: 'Updating',
   updateYtDlp: 'Update yt-dlp',
   autoUpdateYtDlp: 'Auto-update yt-dlp',
+  forceH264: 'Editor-compatible (re-encode >1080p to H.264)',
+  forceH264Note: 'Enabled by default so >1080p/4K imports cleanly into Premiere/editors. Turn off when download speed matters more and you only need playback (keeps VP9/AV1).',
   updateSchedule: 'Update schedule',
   weekly: 'Weekly',
   onStart: 'On app start',
@@ -668,6 +682,10 @@ const en: Messages = {
 
   statusPending: 'Pending',
   statusActive: 'Downloading',
+  statusConnecting: 'Connecting',
+  statusRecode: 'Re-encoding',
+  statusAudioProcessing: 'Processing audio',
+  statusCopying: 'Copying',
   statusCompleted: 'Completed',
   statusFailed: 'Error',
   statusCancelled: 'Cancelled',

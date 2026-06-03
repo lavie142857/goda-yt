@@ -1,6 +1,6 @@
 import { app } from 'electron'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { readJsonWithBackup, writeJsonAtomically } from './json-store.js'
 
 interface HistoryEntry {
   outputFile: string
@@ -41,14 +41,11 @@ export class HistoryStore {
   }
 
   private load(): Record<string, HistoryEntry> {
-    try {
-      const parsed = JSON.parse(readFileSync(this.filePath, 'utf8')) as unknown
-      if (parsed && typeof parsed === 'object') {
-        return parsed as Record<string, HistoryEntry>
-      }
-    } catch {
-      // Missing/corrupt history is non-fatal.
+    const parsed = readJsonWithBackup<Record<string, HistoryEntry>>(this.filePath)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed
     }
+
     return {}
   }
 
@@ -66,8 +63,7 @@ export class HistoryStore {
 
   private persist(): void {
     try {
-      mkdirSync(path.dirname(this.filePath), { recursive: true })
-      writeFileSync(this.filePath, JSON.stringify(this.entries), 'utf8')
+      writeJsonAtomically(this.filePath, this.entries)
     } catch {
       // Best-effort; failing to persist history must not break downloads.
     }

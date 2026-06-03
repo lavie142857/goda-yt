@@ -25,6 +25,12 @@ interface DownloadExecOptions {
   signal: AbortSignal
 }
 
+interface RecodeProgressState {
+  durationSeconds: number | null
+  timeSeconds: number | null
+  speed: { label: string; value: number | null } | null
+}
+
 export class YtDlpDownloadError extends Error {
   constructor(
     message: string,
@@ -142,6 +148,7 @@ export class YtDlpService {
     const executable = resolveYtDlpPath()
     const platform = detectPlatform(request.url)
     const outputDir = request.outputDir?.trim() || options.settings.outputDir
+    const expectsRecode = this.willRecodeVideo(request, options.settings)
     const runWithArgs = async (args: string[]): Promise<void> => {
       await new Promise<void>((resolve, reject) => {
         const child = spawn(executable, args, {
@@ -150,6 +157,15 @@ export class YtDlpService {
         })
 
         let mergedErrorOutput = ''
+        let recodeStarted = false
+        const recodeProgressState: RecodeProgressState = {
+          durationSeconds: null,
+          timeSeconds: null,
+          speed: null,
+        }
+
+        let stdoutBuffer = ''
+        let stderrBuffer = ''
 
         const handleLine = (lineRaw: string) => {
           const line = lineRaw.trim()
@@ -159,8 +175,9 @@ export class YtDlpService {
 
           const progressMatch = line.match(/\[download\]\s+(\d+(?:\.\d+)?)%.*?at\s+([^\s]+).*?ETA\s+([\d:]+)/i)
           if (progressMatch) {
+            const percent = Number(progressMatch[1])
             options.onProgress({
-              percent: Number(progressMatch[1]),
+              percent,
               speed: progressMatch[2],
               eta: progressMatch[3],
               stage: 'dang-tai',
@@ -171,6 +188,25 @@ export class YtDlpService {
           if (line.startsWith('[ExtractAudio]')) {
             options.onProgress({ stage: 'dang-xu-ly-audio' })
             return
+          }
+
+          if (line.startsWith('[VideoConvertor]') || line.startsWith('[Recode')) {
+            recodeStarted = true
+            options.onProgress({
+              percent: 0,
+              speed: '-',
+              eta: '--:--',
+              stage: 'dang-chuyen-ma',
+            })
+            return
+          }
+
+          if (recodeStarted || expectsRecode) {
+            const recodeProgress = this.extractRecodeProgress(line, request.duration, recodeProgressState)
+            if (recodeProgress) {
+              options.onProgress(recodeProgress)
+              return
+            }
           }
 
           const outputFile = this.extractOutputFileFromLine(line, outputDir)
@@ -184,18 +220,36 @@ export class YtDlpService {
           }
         }
 
-        const handleOutput = (chunk: Buffer) => {
-          const text = chunk.toString('utf8')
-          text
-            .split(/\r?\n/)
-            .filter(Boolean)
-            .forEach((line) => handleLine(line))
+        const handleOutput = (chunk: Buffer, stream: 'stdout' | 'stderr') => {
+          const buffered = stream === 'stdout' ? stdoutBuffer : stderrBuffer
+          const text = buffered + chunk.toString('utf8')
+          const lines = text.split(/\r?\n|\r/)
+          const tail = lines.pop() ?? ''
+
+          if (stream === 'stdout') {
+            stdoutBuffer = tail
+          } else {
+            stderrBuffer = tail
+          }
+
+          lines.filter(Boolean).forEach((line) => handleLine(line))
         }
 
-        child.stdout.on('data', handleOutput)
+        const flushOutput = () => {
+          if (stdoutBuffer) {
+            handleLine(stdoutBuffer)
+            stdoutBuffer = ''
+          }
+          if (stderrBuffer) {
+            handleLine(stderrBuffer)
+            stderrBuffer = ''
+          }
+        }
+
+        child.stdout.on('data', (chunk: Buffer) => handleOutput(chunk, 'stdout'))
         child.stderr.on('data', (chunk: Buffer) => {
           mergedErrorOutput += chunk.toString('utf8')
-          handleOutput(chunk)
+          handleOutput(chunk, 'stderr')
         })
 
         const abortHandler = () => {
@@ -216,6 +270,7 @@ export class YtDlpService {
 
         child.on('close', (code) => {
           options.signal.removeEventListener('abort', abortHandler)
+          flushOutput()
 
           if (options.signal.aborted) {
             reject(new Error('DOWNLOAD_ABORTED'))
@@ -393,7 +448,7 @@ export class YtDlpService {
     }
 
     pushJsRuntimeArgs(args)
-    this.pushRequestArgs(args, request, settings.defaultFormat, options)
+    this.pushRequestArgs(args, request, settings.defaultFormat, settings.forceH264, options)
 
     args.push(request.url)
 
@@ -404,6 +459,7 @@ export class YtDlpService {
     args: string[],
     request: DownloadRequest,
     defaultFormat: OutputFormat,
+    forceH264: boolean,
     options: { relaxed: boolean; platform: DownloadPlatform | null },
   ): void {
     const requestedFormat = request.format ?? defaultFormat
@@ -424,16 +480,31 @@ export class YtDlpService {
             '-f',
             `bv*${hf}[vcodec^=avc1]+ba[ext=m4a]/b${hf}[vcodec^=avc1]/bv*${hf}+ba[ext=m4a]/b${hf}`,
           )
+          args.push('--merge-output-format', 'mp4')
         } else {
           args.push('-S', `res:${height},vcodec:vp9,acodec:aac`)
           args.push(
             '-f',
             `bv*${hf}[vcodec^=vp9]+ba[ext=m4a]/bv*${hf}[vcodec^=vp9]+ba/bv*${hf}+ba[ext=m4a]/b${hf}`,
           )
+          if (forceH264) {
+            // Above 1080p YouTube has no H.264, so the video is VP9/AV1 — unreadable
+            // in many editors (Premiere). Re-encode to H.264. Merge to MKV first so
+            // the recode actually runs (recode->mp4 is skipped if already an mp4).
+            // 'veryfast' keeps 4K re-encodes practical (default 'medium' is far slower).
+            args.push('--merge-output-format', 'mkv')
+            args.push('--recode-video', 'mp4')
+            args.push(
+              '--postprocessor-args',
+              'VideoConvertor:-preset veryfast -stats -stats_period 0.5 -progress pipe:2',
+            )
+          } else {
+            args.push('--merge-output-format', 'mp4')
+          }
         }
-      } else {
-        args.push('-f', request.variantSelector.trim())
+        return
       }
+      args.push('-f', request.variantSelector.trim())
       this.pushContainerArgs(args, requestedFormat)
       return
     }
@@ -560,12 +631,131 @@ export class YtDlpService {
   }
 
   private resolveRequestedHeight(quality: QualityOption | undefined): number | null {
-    if (quality === '1080p') return 1080
-    if (quality === '720p') return 720
-    if (quality === '480p') return 480
-    if (quality === '360p') return 360
-    if (quality === '240p') return 240
+    // Parse the height from any "<N>p" label (144p … 2160p, 4320p). Previously this
+    // only knew ≤1080p, so 1440p/2160p resolved to null and silently downgraded the
+    // download to 1080p. "Auto" / no label -> null (no cap).
+    const match = quality?.match(/(\d{3,4})/)
+    return match ? Number(match[1]) : null
+  }
+
+  private willRecodeVideo(request: DownloadRequest, settings: AppSettings): boolean {
+    const requestedFormat = request.format ?? settings.defaultFormat
+    const requestedHeight = this.resolveRequestedHeight(request.quality)
+
+    return Boolean(
+      settings.forceH264
+      && requestedFormat === 'mp4'
+      && request.variantSelector?.trim()
+      && requestedHeight
+      && requestedHeight > 1080,
+    )
+  }
+
+  private extractRecodeProgress(
+    line: string,
+    duration: number | null | undefined,
+    state: RecodeProgressState,
+  ): { percent?: number; speed?: string; eta?: string; stage: string } | null {
+    const durationSeconds = this.extractDurationSeconds(line)
+    const timeSeconds = this.extractProgressTimeSeconds(line)
+    const speed = this.extractProgressSpeed(line)
+
+    if (durationSeconds !== null) {
+      state.durationSeconds = durationSeconds
+    }
+    if (timeSeconds !== null) {
+      state.timeSeconds = timeSeconds
+    }
+    if (speed) {
+      state.speed = speed
+    }
+
+    if (timeSeconds === null && !speed) {
+      return null
+    }
+
+    const currentTimeSeconds = state.timeSeconds
+    const currentSpeed = state.speed
+    const effectiveDuration = typeof duration === 'number' && Number.isFinite(duration) && duration > 0
+      ? duration
+      : state.durationSeconds
+
+    if (typeof effectiveDuration !== 'number' || !Number.isFinite(effectiveDuration) || effectiveDuration <= 0) {
+      return {
+        stage: 'dang-chuyen-ma',
+        speed: currentSpeed?.label,
+      }
+    }
+
+    if (currentTimeSeconds === null) {
+      return {
+        stage: 'dang-chuyen-ma',
+        speed: currentSpeed?.label,
+      }
+    }
+
+    const ratio = Math.min(1, Math.max(0, currentTimeSeconds / effectiveDuration))
+    const remainingSeconds = Math.max(0, effectiveDuration - currentTimeSeconds)
+    const eta = currentSpeed?.value && currentSpeed.value > 0
+      ? this.formatEta(remainingSeconds / currentSpeed.value)
+      : undefined
+
+    return {
+      percent: ratio * 100,
+      speed: currentSpeed?.label,
+      eta,
+      stage: 'dang-chuyen-ma',
+    }
+  }
+
+  private extractDurationSeconds(line: string): number | null {
+    const durationMatch = line.match(/Duration:\s*(-?\d+):(\d+):(\d+(?:\.\d+)?)/i)
+    if (!durationMatch) {
+      return null
+    }
+
+    return (Number(durationMatch[1]) * 3600) + (Number(durationMatch[2]) * 60) + Number(durationMatch[3])
+  }
+
+  private extractProgressTimeSeconds(line: string): number | null {
+    const timeMatch = line.match(/(?:^|\s)(?:time|out_time)=(-?\d+):(\d+):(\d+(?:\.\d+)?)/i)
+    if (timeMatch) {
+      return (Number(timeMatch[1]) * 3600) + (Number(timeMatch[2]) * 60) + Number(timeMatch[3])
+    }
+
+    const microsecondsMatch = line.match(/(?:^|\s)out_time_(?:ms|us)=(\d+)/i)
+    if (microsecondsMatch) {
+      return Number(microsecondsMatch[1]) / 1_000_000
+    }
+
     return null
+  }
+
+  private extractProgressSpeed(line: string): { label: string; value: number | null } | null {
+    const speedMatch = line.match(/(?:^|\s)speed=\s*([^\s]+)/i)
+    if (!speedMatch?.[1]) {
+      return null
+    }
+
+    const label = speedMatch[1]
+    const numeric = Number(label.replace(/x$/i, ''))
+    return {
+      label,
+      value: Number.isFinite(numeric) ? numeric : null,
+    }
+  }
+
+  private formatEta(seconds: number): string {
+    const safeSeconds = Math.max(0, Math.round(seconds))
+    const hours = Math.floor(safeSeconds / 3600)
+    const minutes = Math.floor((safeSeconds % 3600) / 60)
+    const secs = safeSeconds % 60
+
+    if (hours > 0) {
+      return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+    }
+
+    return `${minutes}:${String(secs).padStart(2, '0')}`
   }
 
   private normalizeYtDlpError(raw: string): { message: string; permanent: boolean } {

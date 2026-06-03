@@ -323,7 +323,10 @@ function pickSelectedVariantId(
 }
 
 function getRecommendedQuality(qualities: VideoQualityOption[]): VideoQualityOption {
-  return sortQualityOptions(qualities)[0] ?? AUTO_QUALITY
+  const sorted = sortQualityOptions(qualities)
+  // Default to the best option at or below 1080p — it's H.264 (no re-encode) and
+  // far faster than 4K. The user can still pick a higher chip (1440p/2160p) by hand.
+  return sorted.find((quality) => quality.height != null && quality.height <= 1080) ?? sorted[0] ?? AUTO_QUALITY
 }
 
 function createStagedVideo(metadata: VideoMetadata): StagedVideo {
@@ -358,9 +361,15 @@ function collectBatchQualityLabels(videos: StagedVideo[]): string[] {
   return [...labels].sort((left, right) => parseQualityRank(right) - parseQualityRank(left))
 }
 
-function formatStatusLabel(status: DownloadStatus, t: Messages): string {
+function formatStatusLabel(status: DownloadStatus, t: Messages, stage?: string): string {
   if (status === 'pending') return t.statusPending
-  if (status === 'active') return t.statusActive
+  if (status === 'active') {
+    if (stage === 'dang-ket-noi') return t.statusConnecting
+    if (stage === 'dang-chuyen-ma') return t.statusRecode
+    if (stage === 'dang-xu-ly-audio') return t.statusAudioProcessing
+    if (stage === 'sao-chep') return t.statusCopying
+    return t.statusActive
+  }
   if (status === 'completed') return t.statusCompleted
   if (status === 'failed') return t.statusFailed
   return t.statusCancelled
@@ -414,6 +423,22 @@ function buildDownloadFileName(video: StagedVideo, selectedQuality: VideoQuality
   return appendTagIfMissing(baseTitle, qualityTag)
 }
 
+function buildDownloadVariantKey(input: {
+  url: string
+  preset: DownloadPreset
+  quality?: string
+  format?: OutputFormat
+  variantSelector?: string | null
+}): string {
+  return [
+    canonicalizeVideoKey(input.url),
+    input.preset,
+    input.quality ?? '',
+    input.format ?? '',
+    input.variantSelector ?? '',
+  ].join('|')
+}
+
 function formatDateTime(timestamp: number | null, t: Messages): string {
   if (!timestamp) {
     return t.never
@@ -465,6 +490,7 @@ function computeReorderTarget(
 interface QueueRowProps {
   id: string
   status: DownloadStatus
+  stage: string
   percent: number
   speed: string
   eta: string
@@ -493,8 +519,9 @@ interface QueueRowProps {
 // Memoized so progress ticks (every 250ms) only re-render the rows whose data
 // actually changed, not the whole queue. Props are primitives + stable callbacks.
 const QueueRow = memo(function QueueRow(props: QueueRowProps) {
-  const { id, status, percent, speed, eta, error, outputFile, reused, title, thumbnail, platform, isDragging, canMoveUp, canMoveDown, showLoginHint, t } = props
+  const { id, status, stage, percent, speed, eta, error, outputFile, reused, title, thumbnail, platform, isDragging, canMoveUp, canMoveDown, showLoginHint, t } = props
   const terminal = isTerminalStatus(status)
+  const showIndeterminateProgress = status === 'active' && stage === 'dang-chuyen-ma' && percent <= 0
 
   return (
     <article
@@ -521,7 +548,7 @@ const QueueRow = memo(function QueueRow(props: QueueRowProps) {
         <div className="row-title">{title}</div>
         <div className="row-subline">
           <span className={`platform-tag ${platformColorClass(platform)}`}>{platformLabel(platform, t)}</span>
-          <span>{formatStatusLabel(status, t)}</span>
+          <span>{formatStatusLabel(status, t, stage)}</span>
           {reused && <span className="reused-tag" title={t.reusedHint}>♻ {t.reusedBadge}</span>}
           {status === 'active' && <span className="speed-tag">{speed}</span>}
           {status === 'active' && <span>ETA {eta}</span>}
@@ -533,7 +560,10 @@ const QueueRow = memo(function QueueRow(props: QueueRowProps) {
           )}
         </div>
         {!terminal && (
-          <div className={`desktop-progress ${status === 'active' ? 'progress-animated' : ''}`} aria-hidden="true">
+          <div
+            className={`desktop-progress ${status === 'active' ? 'progress-animated' : ''} ${showIndeterminateProgress ? 'progress-indeterminate' : ''}`}
+            aria-hidden="true"
+          >
             <div style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} />
           </div>
         )}
@@ -673,9 +703,13 @@ function App() {
     : stagedVideos
   const batchQualityLabels = collectBatchQualityLabels(batchTargets)
   const batchTargetCount = batchTargets.length
-  const activeQueueCount = queue.filter((task) => task.status === 'active').length
+  const activeQueueItems = queue.filter((task) => task.status === 'active')
+  const activeQueueCount = activeQueueItems.length
   const pendingQueueCount = queue.filter((task) => task.status === 'pending').length
   const completedQueueCount = queue.filter((task) => task.status === 'completed').length
+  const activeQueueProgress = activeQueueCount > 0
+    ? Math.round(activeQueueItems.reduce((sum, task) => sum + task.progress.percent, 0) / activeQueueCount)
+    : 0
   const queueSummaryParts: string[] = []
   if (stagedVideos.length > 0) queueSummaryParts.push(t.countWaiting(stagedVideos.length))
   if (activeQueueCount > 0) queueSummaryParts.push(t.countDownloading(activeQueueCount))
@@ -1216,7 +1250,19 @@ function App() {
       return
     }
 
-    const existingUrls = new Set(queue.map((task) => canonicalizeVideoKey(task.request.url)))
+    const existingItems = new Set(
+      queue
+        .filter((task) => task.status === 'pending' || task.status === 'active')
+        .map((task) =>
+          buildDownloadVariantKey({
+            url: task.request.url,
+            preset: task.request.preset,
+            quality: task.request.quality,
+            format: task.request.format,
+            variantSelector: task.request.variantSelector,
+          }),
+        ),
+    )
     const seenIncoming = new Set<string>()
     let duplicateCount = 0
     const queueable = targets.filter((video) => {
@@ -1225,12 +1271,22 @@ function App() {
         return false
       }
 
-      if (existingUrls.has(normalized) || seenIncoming.has(normalized)) {
+      const selectedQuality = getSelectedQuality(video)
+      const audioOnly = isAudioOnlyPreset(video.preset)
+      const itemKey = buildDownloadVariantKey({
+        url: video.url,
+        preset: video.preset,
+        quality: audioOnly ? undefined : selectedQuality.label,
+        format: audioOnly ? undefined : settings?.defaultFormat ?? 'mp4',
+        variantSelector: audioOnly ? null : selectedQuality.selector,
+      })
+
+      if (existingItems.has(itemKey) || seenIncoming.has(itemKey)) {
         duplicateCount += 1
         return false
       }
 
-      seenIncoming.add(normalized)
+      seenIncoming.add(itemKey)
       return true
     })
 
@@ -1261,6 +1317,7 @@ function App() {
             format: audioOnly ? undefined : settings?.defaultFormat ?? 'mp4',
             variantId: audioOnly ? null : selectedQuality.id,
             variantSelector: audioOnly ? null : selectedQuality.selector,
+            duration: video.duration,
           }
         }),
       })
@@ -1773,6 +1830,7 @@ function App() {
                 key={task.id}
                 id={task.id}
                 status={task.status}
+                stage={task.progress.stage}
                 percent={task.progress.percent}
                 speed={task.progress.speed}
                 eta={task.progress.eta}
@@ -1847,9 +1905,9 @@ function App() {
             {activeQueueCount > 0 && (
               <span className="status-progress-mini">
                 <span className="status-progress-bar">
-                  <span style={{ width: `${Math.round(queue.filter(t => t.status === 'active').reduce((sum, t) => sum + t.progress.percent, 0) / Math.max(1, activeQueueCount))}%` }} />
+                  <span style={{ width: `${activeQueueProgress}%` }} />
                 </span>
-                <span>{Math.round(queue.filter(t => t.status === 'active').reduce((sum, t) => sum + t.progress.percent, 0) / Math.max(1, activeQueueCount))}%</span>
+                <span>{activeQueueProgress}%</span>
               </span>
             )}
             <span>{queueControl.paused ? t.paused : activeQueueCount > 0 ? t.downloadingStatus : t.ready}</span>
@@ -1878,23 +1936,21 @@ function App() {
 
               <div className="settings-section-label">{t.secBasic}</div>
 
-              <div className="smart-profile-grid">
-                {SMART_PROFILES.map((profile) => (
-                  <button
-                    key={profile.id}
-                    className={`smart-profile ${smartProfileMatchesSettings(profile, settings) ? 'active' : ''}`}
-                    type="button"
-                    onClick={() => void applySmartProfile(profile.id)}
+              <div className="settings-grid">
+                <label className="field">
+                  <span>{t.language}</span>
+                  <select
+                    value={settings?.language ?? 'vi'}
+                    onChange={(event) =>
+                      void updateSettings({ language: event.target.value as AppLanguage })
+                    }
                     disabled={!settings}
                   >
-                    <strong>{t[profile.labelKey]}</strong>
-                    <span>{t[profile.descKey]}</span>
-                    {smartProfileMatchesSettings(profile, settings) && <small>{t.inUse}</small>}
-                  </button>
-                ))}
-              </div>
+                    <option value="vi">Tiếng Việt</option>
+                    <option value="en">English</option>
+                  </select>
+                </label>
 
-              <div className="settings-grid">
                 <label className="field">
                   <span>{t.formatLabel}</span>
                   <select
@@ -1945,6 +2001,39 @@ function App() {
                     ))}
                   </select>
                 </label>
+              </div>
+
+              <div className="smart-profile-grid">
+                {SMART_PROFILES.map((profile) => (
+                  <button
+                    key={profile.id}
+                    className={`smart-profile ${smartProfileMatchesSettings(profile, settings) ? 'active' : ''}`}
+                    type="button"
+                    onClick={() => void applySmartProfile(profile.id)}
+                    disabled={!settings}
+                  >
+                    <strong>{t[profile.labelKey]}</strong>
+                    <span>{t[profile.descKey]}</span>
+                    {smartProfileMatchesSettings(profile, settings) && <small>{t.inUse}</small>}
+                  </button>
+                ))}
+              </div>
+
+              <div className="settings-auto-row">
+                <label className="switch-line">
+                  <input
+                    className="switch-input"
+                    type="checkbox"
+                    checked={settings?.forceH264 ?? true}
+                    onChange={(event) => void updateSettings({ forceH264: event.target.checked })}
+                    disabled={!settings}
+                  />
+                  <span className="switch-track" aria-hidden="true">
+                    <span className="switch-thumb" />
+                  </span>
+                  <span className="switch-text">{t.forceH264}</span>
+                </label>
+                <small>{t.forceH264Note}</small>
               </div>
 
               <div className="settings-section-label">{t.outputFolder}</div>
@@ -2183,19 +2272,6 @@ function App() {
                   />
                 </label>
                 <div className="bug-report-foot">
-                  <label className="field compact-field">
-                    <span>{t.language}</span>
-                    <select
-                      value={settings?.language ?? 'vi'}
-                      onChange={(event) =>
-                        void updateSettings({ language: event.target.value as AppLanguage })
-                      }
-                      disabled={!settings}
-                    >
-                      <option value="vi">Tiếng Việt</option>
-                      <option value="en">English</option>
-                    </select>
-                  </label>
                   <button
                     className="primary-button"
                     type="button"

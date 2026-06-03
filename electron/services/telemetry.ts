@@ -4,35 +4,48 @@ import { request as httpsRequest } from 'node:https'
 import { arch, hostname, release } from 'node:os'
 import type { AppSettings } from '../types.js'
 
-// ============================================================================
-// TELEGRAM CONFIG — paste your bot token and chat id here.
-//   1. Talk to @BotFather on Telegram -> /newbot -> copy the token.
-//   2. Send any message to your bot, then open
-//      https://api.telegram.org/bot<TOKEN>/getUpdates to find your chat id.
-// SECURITY: these values are embedded in the distributed app and CAN be
-// extracted by users. Use a bot dedicated only to receiving telemetry.
-// ============================================================================
-const TELEGRAM_BOT_TOKEN = '7425581998:AAGp4tS6_uwYfpBE59qdY2_uI_4ND_zNJmo'
-const TELEGRAM_CHAT_ID = '730011734'
+interface TelegramConfig {
+  botToken: string
+  chatId: string
+}
 
-// Persistent "already pinged" marker in HKCU — survives an %APPDATA% wipe or a
-// reinstall, so each machine notifies Telegram only once, ever.
+const DEFAULT_TELEGRAM_BOT_TOKEN = '7425581998:AAGp4tS6_uwYfpBE59qdY2_uI_4ND_zNJmo'
+const DEFAULT_TELEGRAM_CHAT_ID = '730011734'
+
+// Env vars override the bundled default so release builds can swap Telegram
+// targets without editing source:
+//   FLASH_MEDIA_TELEGRAM_BOT_TOKEN=<bot token>
+//   FLASH_MEDIA_TELEGRAM_CHAT_ID=<chat id>
+function getTelegramConfig(): TelegramConfig | null {
+  const botToken = process.env.FLASH_MEDIA_TELEGRAM_BOT_TOKEN?.trim() || DEFAULT_TELEGRAM_BOT_TOKEN
+  const chatId = process.env.FLASH_MEDIA_TELEGRAM_CHAT_ID?.trim() || DEFAULT_TELEGRAM_CHAT_ID
+
+  if (!botToken || !chatId) {
+    return null
+  }
+
+  return { botToken, chatId }
+}
+
+// Persistent "already pinged" marker in HKCU. This survives an %APPDATA% wipe or
+// reinstall, so each machine notifies Telegram only once.
 const REG_KEY = 'HKCU\\Software\\FLASH MEDIA'
 const REG_VALUE = 'InstallPinged'
 
 function isConfigured(): boolean {
-  return Boolean(TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID)
+  return Boolean(getTelegramConfig())
 }
 
 // Fire-and-forget Telegram message. Never throws.
 // onSuccess runs only when Telegram accepts the message (HTTP 2xx).
 function sendTelegram(text: string, onSuccess?: () => void): void {
-  if (!isConfigured()) {
+  const config = getTelegramConfig()
+  if (!config) {
     return
   }
 
   const payload = JSON.stringify({
-    chat_id: TELEGRAM_CHAT_ID,
+    chat_id: config.chatId,
     text,
     disable_notification: true,
   })
@@ -40,7 +53,7 @@ function sendTelegram(text: string, onSuccess?: () => void): void {
   const req = httpsRequest(
     {
       hostname: 'api.telegram.org',
-      path: `/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+      path: `/bot${config.botToken}/sendMessage`,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -112,8 +125,7 @@ export function sendInstallTelemetry(settings: AppSettings): boolean {
     lines.push(`user: ${name}`)
   }
 
-  // Mark as sent only after Telegram confirms — so an offline first launch
-  // retries on the next launch instead of losing the install ping forever.
+  // Mark as sent only after Telegram confirms so an offline first launch retries.
   sendTelegram(lines.join('\n'), () => writeRegistryMarker(`${installDate}|${machine}`))
   return true
 }
@@ -154,8 +166,6 @@ export function sendBugReport(report: { name: string; email: string; message: st
   )
 }
 
-// ---- Error reporting (throttled to avoid flooding Telegram) ----------------
-
 const recentErrors = new Map<string, number>()
 let lastErrorSentAt = 0
 const SAME_ERROR_COOLDOWN_MS = 60_000
@@ -177,7 +187,7 @@ export function reportError(report: ErrorReport): void {
   const signature = `${report.context}|${message.slice(0, 120)}`
   const now = Date.now()
 
-  // Drop entries older than the cooldown so the dedupe map can't grow unbounded.
+  // Drop entries older than the cooldown so the dedupe map cannot grow unbounded.
   if (recentErrors.size > 200) {
     for (const [key, ts] of recentErrors) {
       if (now - ts >= SAME_ERROR_COOLDOWN_MS) {
