@@ -636,9 +636,11 @@ function App() {
   const hasBridge = Boolean(window.electronAPI)
   const t = getMessages(settings?.language)
   // Suggest logging in for explicit auth errors, and for the generic failure
-  // (whose message itself lists "requires sign-in" as a likely cause).
+  // (whose message itself lists "requires sign-in" as a likely cause). But never
+  // when already logged in — re-prompting to log in is confusing and the real
+  // error should show instead.
   const suggestLogin = (rawError: string): boolean =>
-    needsLogin(rawError) || formatQueueError(rawError, t) === t.errGeneric
+    !authLoggedIn && (needsLogin(rawError) || formatQueueError(rawError, t) === t.errGeneric)
 
   // Refs holding the latest values so QueueRow callbacks can stay referentially
   // stable (empty-deps useCallback) without going stale.
