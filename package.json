@@ -1,7 +1,7 @@
 {
   "name": "goda-yt",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "FLASH MEDIA desktop downloader for YouTube, TikTok, Facebook, and Instagram.",
   "author": "FLASH MEDIA",
   "type": "module",
