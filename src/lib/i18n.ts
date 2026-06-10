@@ -42,6 +42,7 @@ export interface Messages {
   downloadListAria: string
   readyToDownload: string
   emptySubtitle: string
+  pressForShortcuts: (key: string) => string
   errorLabel: string
   tempErrorLabel: string
   loginToDownload: string
@@ -302,6 +303,7 @@ const vi: Messages = {
   downloadListAria: 'Danh sách tải',
   readyToDownload: 'Sẵn sàng tải video',
   emptySubtitle: 'Dán link YouTube, TikTok, Facebook hoặc Instagram để bắt đầu',
+  pressForShortcuts: (key: string) => `Nhấn ${key} để xem phím tắt`,
   errorLabel: 'Lỗi',
   tempErrorLabel: 'Tạm lỗi',
   loginToDownload: '🔑 Đăng nhập để tải',
@@ -562,6 +564,7 @@ const en: Messages = {
   downloadListAria: 'Download list',
   readyToDownload: 'Ready to download videos',
   emptySubtitle: 'Paste a YouTube, TikTok, Facebook or Instagram link to begin',
+  pressForShortcuts: (key: string) => `Press ${key} for keyboard shortcuts`,
   errorLabel: 'Error',
   tempErrorLabel: 'Temporary error',
   loginToDownload: '🔑 Log in to download',

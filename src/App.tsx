@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import type { DragEvent } from 'react'
+import type { DragEvent, SyntheticEvent } from 'react'
 import type {
   AppLanguage,
   AppSettings,
@@ -521,6 +521,21 @@ interface QueueRowProps {
   onLoginHint: () => void
 }
 
+// Empty SVG used to swap out a thumbnail whose URL failed to load (expired/blocked
+// YouTube/TikTok thumbnails are common) so the row shows the clean placeholder
+// gradient instead of the browser's broken-image icon.
+const THUMB_FALLBACK = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"
+
+function handleThumbError(event: SyntheticEvent<HTMLImageElement>): void {
+  const img = event.currentTarget
+  if (img.dataset.fallback) {
+    return
+  }
+  img.dataset.fallback = '1'
+  img.classList.add('placeholder')
+  img.src = THUMB_FALLBACK
+}
+
 // Memoized so progress ticks (every 250ms) only re-render the rows whose data
 // actually changed, not the whole queue. Props are primitives + stable callbacks.
 const QueueRow = memo(function QueueRow(props: QueueRowProps) {
@@ -543,7 +558,7 @@ const QueueRow = memo(function QueueRow(props: QueueRowProps) {
       {!terminal && <span className="queue-drag-handle" aria-hidden="true">⠿</span>}
       <div className="row-thumb-wrap">
         {thumbnail ? (
-          <img className="row-thumb" src={thumbnail} alt="" referrerPolicy="no-referrer" loading="lazy" />
+          <img className="row-thumb" src={thumbnail} alt="" referrerPolicy="no-referrer" loading="lazy" onError={handleThumbError} />
         ) : (
           <div className="row-thumb placeholder" />
         )}
@@ -1719,6 +1734,7 @@ function App() {
                 </div>
                 <h2 className="empty-title">{t.readyToDownload}</h2>
                 <p className="empty-subtitle">{t.emptySubtitle}</p>
+                <p className="shortcut-hint">{t.pressForShortcuts('?')}</p>
               </div>
             </div>
           ) : null}
@@ -1757,7 +1773,7 @@ function App() {
                 </label>
                 <div className="row-thumb-wrap">
                   {video.thumbnail ? (
-                    <img className="row-thumb" src={video.thumbnail} alt="" referrerPolicy="no-referrer" loading="lazy" />
+                    <img className="row-thumb" src={video.thumbnail} alt="" referrerPolicy="no-referrer" loading="lazy" onError={handleThumbError} />
                   ) : (
                     <div className="row-thumb placeholder" />
                   )}
@@ -2335,75 +2351,20 @@ function App() {
             </div>
 
             <div style={{ display: 'grid', gap: '12px' }}>
-              <div className="tool-pill">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>{t.addLink}</span>
-                  <kbd style={{ 
-                    padding: '4px 8px', 
-                    background: 'var(--surface-muted)', 
-                    border: '1px solid var(--line-strong)',
-                    borderRadius: '6px',
-                    fontFamily: 'monospace',
-                    fontSize: '0.85rem'
-                  }}>Ctrl + Enter</kbd>
+              {[
+                { label: t.addLink, keys: 'Ctrl + Enter' },
+                { label: t.startDownloadShort, keys: 'Ctrl + Shift + Enter' },
+                { label: t.openSettingsShort, keys: 'Ctrl + ,' },
+                { label: t.closeModal, keys: 'Esc' },
+                { label: t.showShortcuts, keys: '?' },
+              ].map((row) => (
+                <div className="tool-pill" key={row.keys}>
+                  <div className="shortcut-row">
+                    <span>{row.label}</span>
+                    <kbd className="kbd">{row.keys}</kbd>
+                  </div>
                 </div>
-              </div>
-
-              <div className="tool-pill">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>{t.startDownloadShort}</span>
-                  <kbd style={{ 
-                    padding: '4px 8px', 
-                    background: 'var(--surface-muted)', 
-                    border: '1px solid var(--line-strong)',
-                    borderRadius: '6px',
-                    fontFamily: 'monospace',
-                    fontSize: '0.85rem'
-                  }}>Ctrl + Shift + Enter</kbd>
-                </div>
-              </div>
-
-              <div className="tool-pill">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>{t.openSettingsShort}</span>
-                  <kbd style={{ 
-                    padding: '4px 8px', 
-                    background: 'var(--surface-muted)', 
-                    border: '1px solid var(--line-strong)',
-                    borderRadius: '6px',
-                    fontFamily: 'monospace',
-                    fontSize: '0.85rem'
-                  }}>Ctrl + ,</kbd>
-                </div>
-              </div>
-
-              <div className="tool-pill">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>{t.closeModal}</span>
-                  <kbd style={{ 
-                    padding: '4px 8px', 
-                    background: 'var(--surface-muted)', 
-                    border: '1px solid var(--line-strong)',
-                    borderRadius: '6px',
-                    fontFamily: 'monospace',
-                    fontSize: '0.85rem'
-                  }}>Esc</kbd>
-                </div>
-              </div>
-
-              <div className="tool-pill">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>{t.showShortcuts}</span>
-                  <kbd style={{ 
-                    padding: '4px 8px', 
-                    background: 'var(--surface-muted)', 
-                    border: '1px solid var(--line-strong)',
-                    borderRadius: '6px',
-                    fontFamily: 'monospace',
-                    fontSize: '0.85rem'
-                  }}>?</kbd>
-                </div>
-              </div>
+              ))}
             </div>
           </div>
         </div>

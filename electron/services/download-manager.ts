@@ -72,38 +72,54 @@ export class DownloadManager {
 
   // If this exact (video, quality) was downloaded before and the file still
   // exists, copy it into the current output folder instead of re-downloading.
-  private async tryReuseExisting(task: DownloadTask): Promise<boolean> {
-    const key = this.reuseKey(task.request)
-    const entry = this.historyStore.find(key)
-    if (!entry) {
-      return false
-    }
-
-    // Old file is gone (deleted/moved): drop the stale entry and download fresh.
-    if (!existsSync(entry.outputFile)) {
-      this.historyStore.remove(key)
-      return false
-    }
-
-    const targetDir = task.request.outputDir?.trim() || this.settingsStore.get().outputDir
-    const targetPath = path.join(targetDir, path.basename(entry.outputFile))
-
+  // Returns true when the file was reused. Honors the abort signal (a cancel/pause
+  // during the copy throws DOWNLOAD_ABORTED, handled like any aborted download).
+  // Any unexpected failure returns false so we fall back to a normal download
+  // rather than leaving the task stuck.
+  private async tryReuseExisting(task: DownloadTask, signal: AbortSignal): Promise<boolean> {
     try {
+      const key = this.reuseKey(task.request)
+      const entry = this.historyStore.find(key)
+      if (!entry) {
+        return false
+      }
+
+      // Old file is gone (deleted/moved): drop the stale entry and download fresh.
+      if (!existsSync(entry.outputFile)) {
+        this.historyStore.remove(key)
+        return false
+      }
+
+      if (signal.aborted) {
+        throw new Error('DOWNLOAD_ABORTED')
+      }
+
+      const targetDir = task.request.outputDir?.trim() || this.settingsStore.get().outputDir
+      const targetPath = path.join(targetDir, path.basename(entry.outputFile))
+
       if (entry.outputFile !== targetPath && !existsSync(targetPath)) {
         await mkdir(targetDir, { recursive: true })
         await copyFile(entry.outputFile, targetPath)
       }
-    } catch {
-      return false // copy failed -> fall back to a normal download
-    }
 
-    task.outputFile = existsSync(targetPath) ? targetPath : entry.outputFile
-    task.reused = true
-    task.status = 'completed'
-    task.progress = { percent: 100, speed: '-', eta: '00:00', stage: 'sao-chep' }
-    task.updatedAt = Date.now()
-    this.historyStore.record(key, task.outputFile)
-    return true
+      // The copy can't be interrupted mid-flight, so re-check after it finishes.
+      if (signal.aborted) {
+        throw new Error('DOWNLOAD_ABORTED')
+      }
+
+      task.outputFile = existsSync(targetPath) ? targetPath : entry.outputFile
+      task.reused = true
+      task.status = 'completed'
+      task.progress = { percent: 100, speed: '-', eta: '00:00', stage: 'sao-chep' }
+      task.updatedAt = Date.now()
+      this.historyStore.record(key, task.outputFile)
+      return true
+    } catch (error) {
+      if ((error as Error).message === 'DOWNLOAD_ABORTED') {
+        throw error // let runTask treat it as a cancel/pause
+      }
+      return false // copy/lookup failed -> fall back to a normal download
+    }
   }
 
   getQueue(): DownloadTask[] {
@@ -351,14 +367,13 @@ export class DownloadManager {
     this.activeControllers.set(task.id, controller)
     this.emitQueueImmediate()
 
-    if (await this.tryReuseExisting(task)) {
-      this.activeControllers.delete(task.id)
-      this.emitQueueImmediate()
-      this.schedule()
-      return
-    }
-
     try {
+      // Reuse a previously-downloaded file if possible (handled inside the try so
+      // the finally always frees the slot and the catch handles a cancel/pause).
+      if (await this.tryReuseExisting(task, controller.signal)) {
+        return
+      }
+
       await this.ytDlpService.download(task.request, {
         settings: this.settingsStore.get(),
         signal: controller.signal,

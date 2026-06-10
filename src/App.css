@@ -1,5 +1,5 @@
 /* ============================================
-   YTvibez Design System
+   FLASH MEDIA Design System
    Clean, modern UI with dark/light theme support
    ============================================ */
 
@@ -1291,9 +1291,16 @@ select option {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
-  padding-top: 4px;
+  padding-top: 16px;
   border-top: 1px solid var(--line);
-  margin-top: 4px;
+  margin-top: 10px;
+}
+
+/* First section sits right under the header — no extra divider/space needed. */
+.settings-modal-head + .settings-section-label {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
 }
 
 .bug-report {
@@ -2415,4 +2422,37 @@ select option {
 @keyframes ready-pulse {
   0%, 100% { box-shadow: var(--shadow-sm); }
   50% { box-shadow: 0 0 0 4px var(--accent-glow), var(--shadow-sm); }
+}
+
+/* ============================================
+   Keyboard shortcuts
+   ============================================ */
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.shortcut-row > span {
+  font-weight: 600;
+  color: var(--text);
+}
+
+kbd.kbd {
+  padding: 4px 8px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* Subtle discoverability hint (e.g. empty state) */
+.shortcut-hint {
+  margin-top: 14px;
+  font-size: 0.82rem;
+  color: var(--muted);
 }
