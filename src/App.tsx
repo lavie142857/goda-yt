@@ -1734,6 +1734,7 @@ function App() {
                 </div>
                 <h2 className="empty-title">{t.readyToDownload}</h2>
                 <p className="empty-subtitle">{t.emptySubtitle}</p>
+                <p className="shortcut-hint">{t.pressForShortcuts('?')}</p>
               </div>
             </div>
           ) : null}
@@ -2350,75 +2351,20 @@ function App() {
             </div>
 
             <div style={{ display: 'grid', gap: '12px' }}>
-              <div className="tool-pill">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>{t.addLink}</span>
-                  <kbd style={{ 
-                    padding: '4px 8px', 
-                    background: 'var(--surface-muted)', 
-                    border: '1px solid var(--line-strong)',
-                    borderRadius: '6px',
-                    fontFamily: 'monospace',
-                    fontSize: '0.85rem'
-                  }}>Ctrl + Enter</kbd>
+              {[
+                { label: t.addLink, keys: 'Ctrl + Enter' },
+                { label: t.startDownloadShort, keys: 'Ctrl + Shift + Enter' },
+                { label: t.openSettingsShort, keys: 'Ctrl + ,' },
+                { label: t.closeModal, keys: 'Esc' },
+                { label: t.showShortcuts, keys: '?' },
+              ].map((row) => (
+                <div className="tool-pill" key={row.keys}>
+                  <div className="shortcut-row">
+                    <span>{row.label}</span>
+                    <kbd className="kbd">{row.keys}</kbd>
+                  </div>
                 </div>
-              </div>
-
-              <div className="tool-pill">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>{t.startDownloadShort}</span>
-                  <kbd style={{ 
-                    padding: '4px 8px', 
-                    background: 'var(--surface-muted)', 
-                    border: '1px solid var(--line-strong)',
-                    borderRadius: '6px',
-                    fontFamily: 'monospace',
-                    fontSize: '0.85rem'
-                  }}>Ctrl + Shift + Enter</kbd>
-                </div>
-              </div>
-
-              <div className="tool-pill">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>{t.openSettingsShort}</span>
-                  <kbd style={{ 
-                    padding: '4px 8px', 
-                    background: 'var(--surface-muted)', 
-                    border: '1px solid var(--line-strong)',
-                    borderRadius: '6px',
-                    fontFamily: 'monospace',
-                    fontSize: '0.85rem'
-                  }}>Ctrl + ,</kbd>
-                </div>
-              </div>
-
-              <div className="tool-pill">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>{t.closeModal}</span>
-                  <kbd style={{ 
-                    padding: '4px 8px', 
-                    background: 'var(--surface-muted)', 
-                    border: '1px solid var(--line-strong)',
-                    borderRadius: '6px',
-                    fontFamily: 'monospace',
-                    fontSize: '0.85rem'
-                  }}>Esc</kbd>
-                </div>
-              </div>
-
-              <div className="tool-pill">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>{t.showShortcuts}</span>
-                  <kbd style={{ 
-                    padding: '4px 8px', 
-                    background: 'var(--surface-muted)', 
-                    border: '1px solid var(--line-strong)',
-                    borderRadius: '6px',
-                    fontFamily: 'monospace',
-                    fontSize: '0.85rem'
-                  }}>?</kbd>
-                </div>
-              </div>
+              ))}
             </div>
           </div>
         </div>
