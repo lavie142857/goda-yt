@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import type { DragEvent } from 'react'
+import type { DragEvent, SyntheticEvent } from 'react'
 import type {
   AppLanguage,
   AppSettings,
@@ -521,6 +521,21 @@ interface QueueRowProps {
   onLoginHint: () => void
 }
 
+// Empty SVG used to swap out a thumbnail whose URL failed to load (expired/blocked
+// YouTube/TikTok thumbnails are common) so the row shows the clean placeholder
+// gradient instead of the browser's broken-image icon.
+const THUMB_FALLBACK = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E"
+
+function handleThumbError(event: SyntheticEvent<HTMLImageElement>): void {
+  const img = event.currentTarget
+  if (img.dataset.fallback) {
+    return
+  }
+  img.dataset.fallback = '1'
+  img.classList.add('placeholder')
+  img.src = THUMB_FALLBACK
+}
+
 // Memoized so progress ticks (every 250ms) only re-render the rows whose data
 // actually changed, not the whole queue. Props are primitives + stable callbacks.
 const QueueRow = memo(function QueueRow(props: QueueRowProps) {
@@ -543,7 +558,7 @@ const QueueRow = memo(function QueueRow(props: QueueRowProps) {
       {!terminal && <span className="queue-drag-handle" aria-hidden="true">⠿</span>}
       <div className="row-thumb-wrap">
         {thumbnail ? (
-          <img className="row-thumb" src={thumbnail} alt="" referrerPolicy="no-referrer" loading="lazy" />
+          <img className="row-thumb" src={thumbnail} alt="" referrerPolicy="no-referrer" loading="lazy" onError={handleThumbError} />
         ) : (
           <div className="row-thumb placeholder" />
         )}
@@ -1757,7 +1772,7 @@ function App() {
                 </label>
                 <div className="row-thumb-wrap">
                   {video.thumbnail ? (
-                    <img className="row-thumb" src={video.thumbnail} alt="" referrerPolicy="no-referrer" loading="lazy" />
+                    <img className="row-thumb" src={video.thumbnail} alt="" referrerPolicy="no-referrer" loading="lazy" onError={handleThumbError} />
                   ) : (
                     <div className="row-thumb placeholder" />
                   )}
