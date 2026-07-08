@@ -797,6 +797,56 @@ select option {
   transition: all 0.15s var(--ease);
 }
 
+/* Trim (clip range) editor — hidden until the ✂ button is toggled */
+.trim-editor {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.trim-icon {
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
+.trim-input {
+  width: 108px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-family: inherit;
+}
+
+.trim-input::placeholder {
+  color: var(--muted);
+}
+
+.trim-sep {
+  color: var(--muted);
+}
+
+.trim-hint {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+/* Inline label+control row (e.g. re-encode encoder select in Settings) */
+.field-inline {
+  flex-direction: row !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.field-inline select {
+  min-width: 180px;
+}
+
 .filename-edit::placeholder {
   color: var(--muted);
 }

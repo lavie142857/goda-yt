@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { readJsonWithBackup, writeJsonAtomically } from './json-store.js'
-import type { AppLanguage, AppSettings, AuthMode, CookiesBrowser, OutputFormat, YtDlpAutoUpdateMode } from '../types.js'
+import type { AppLanguage, AppSettings, AuthMode, CookiesBrowser, OutputFormat, RecodeEncoder, YtDlpAutoUpdateMode } from '../types.js'
 
 const SETTINGS_FILE = 'settings.json'
 
@@ -56,6 +56,8 @@ export class SettingsStore {
       userEmail: typeof payload.userEmail === 'string' ? payload.userEmail.slice(0, 120) : this.settings.userEmail,
       lastVersion: typeof payload.lastVersion === 'string' ? payload.lastVersion : this.settings.lastVersion,
       forceH264: normalizeBoolean(payload.forceH264, this.settings.forceH264),
+      recodeEncoder: normalizeRecodeEncoder(payload.recodeEncoder, this.settings.recodeEncoder),
+      embedMetadata: normalizeBoolean(payload.embedMetadata, this.settings.embedMetadata),
     }
 
     this.ensureOutputDir(next.outputDir)
@@ -99,6 +101,8 @@ export class SettingsStore {
       userEmail: typeof parsed.userEmail === 'string' ? parsed.userEmail : defaultSettings.userEmail,
       lastVersion: typeof parsed.lastVersion === 'string' ? parsed.lastVersion : defaultSettings.lastVersion,
       forceH264: normalizeBoolean(parsed.forceH264, defaultSettings.forceH264),
+      recodeEncoder: normalizeRecodeEncoder(parsed.recodeEncoder, defaultSettings.recodeEncoder),
+      embedMetadata: normalizeBoolean(parsed.embedMetadata, defaultSettings.embedMetadata),
     }
   }
 
@@ -132,6 +136,8 @@ function getDefaultSettings(): AppSettings {
     userEmail: '',
     lastVersion: '',
     forceH264: true,
+    recodeEncoder: 'auto',
+    embedMetadata: true,
   }
 }
 
@@ -197,6 +203,17 @@ function normalizeAuthMode(
   fallback: AuthMode,
 ): AuthMode {
   if (value === 'public' || value === 'auto' || value === 'cookies') {
+    return value
+  }
+
+  return fallback
+}
+
+function normalizeRecodeEncoder(
+  value: RecodeEncoder | undefined,
+  fallback: RecodeEncoder,
+): RecodeEncoder {
+  if (value === 'auto' || value === 'gpu' || value === 'cpu') {
     return value
   }
 

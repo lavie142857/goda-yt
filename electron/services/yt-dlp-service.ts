@@ -4,11 +4,13 @@ import { readdirSync, statSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import {
   pushJsRuntimeArgs,
+  resolveAria2cPath,
   resolveFfmpegLocation,
   resolveNodeRuntimeSpec,
   resolveYtDlpPath,
 } from './binaries.js'
 import { detectPlatform } from './platform.js'
+import { resolveH264RecodeArgs } from './gpu.js'
 import type { CookiesHandle } from './auth-store.js'
 import type {
   AppSettings,
@@ -16,6 +18,7 @@ import type {
   DownloadRequest,
   OutputFormat,
   QualityOption,
+  RecodeEncoder,
   YtDlpProbe,
   YtDlpUpdateResult,
 } from '../types.js'
@@ -541,13 +544,50 @@ export class YtDlpService {
       args.push('--cookies-from-browser', settings.cookiesBrowser)
     }
 
+    // Clip range (trim): download only the requested section. Uses keyframe-accurate
+    // cuts. Note: aria2c can't do partial downloads, so trimming disables it below.
+    const section = this.buildDownloadSection(request.trimStart, request.trimEnd)
+    if (section) {
+      args.push('--download-sections', section)
+      args.push('--force-keyframes-at-cuts')
+    }
+
+    // Faster multi-connection downloads via aria2c when bundled. Rate-limit-sensitive
+    // platforms get fewer connections to avoid soft-blocks. Skipped while trimming.
+    const aria2c = resolveAria2cPath()
+    if (aria2c && !section) {
+      const connections = options.platform === 'youtube' ? 16 : 4
+      args.push('--downloader', aria2c)
+      args.push('--downloader-args', `aria2c:-x${connections} -s${connections} -k1M`)
+    }
+
+    // Embed the thumbnail as cover art + write title/uploader/etc. into the file.
+    if (settings.embedMetadata) {
+      args.push('--embed-metadata', '--embed-thumbnail')
+    }
+
     pushJsRuntimeArgs(args)
     this.pushTikTokExtractorArgs(args, options.platform, options.tiktokProfile)
-    this.pushRequestArgs(args, request, settings.defaultFormat, settings.forceH264, options)
+    this.pushRequestArgs(args, request, settings.defaultFormat, settings.forceH264, settings.recodeEncoder, options)
 
     args.push(request.url)
 
     return args
+  }
+
+  // Build a yt-dlp --download-sections value ("*start-end") from optional trim
+  // timestamps. Returns null when neither is set (download the whole video).
+  private buildDownloadSection(
+    trimStart?: string | null,
+    trimEnd?: string | null,
+  ): string | null {
+    const start = trimStart?.trim()
+    const end = trimEnd?.trim()
+    if (!start && !end) {
+      return null
+    }
+
+    return `*${start || '0'}-${end || 'inf'}`
   }
 
   private pushRequestArgs(
@@ -555,6 +595,7 @@ export class YtDlpService {
     request: DownloadRequest,
     defaultFormat: OutputFormat,
     forceH264: boolean,
+    recodeEncoder: RecodeEncoder,
     options: { relaxed: boolean; platform: DownloadPlatform | null },
   ): void {
     const requestedFormat = request.format ?? defaultFormat
@@ -587,12 +628,12 @@ export class YtDlpService {
             // Above 1080p YouTube has no H.264, so the video is VP9/AV1 — unreadable
             // in many editors (Premiere). Re-encode to H.264. Merge to MKV first so
             // the recode actually runs (recode->mp4 is skipped if already an mp4).
-            // 'veryfast' keeps 4K re-encodes practical (default 'medium' is far slower).
+            // Encoder honors the user's GPU/CPU choice (GPU makes 4K re-encodes fast).
             args.push('--merge-output-format', 'mkv')
             args.push('--recode-video', 'mp4')
             args.push(
               '--postprocessor-args',
-              'VideoConvertor:-preset veryfast -stats -stats_period 0.5 -progress pipe:2',
+              `VideoConvertor:${resolveH264RecodeArgs(recodeEncoder)} -stats -stats_period 0.5 -progress pipe:2`,
             )
           } else {
             args.push('--merge-output-format', 'mp4')

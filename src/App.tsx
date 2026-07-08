@@ -11,6 +11,7 @@ import type {
   NetworkStatus,
   QueueControlState,
   OutputFormat,
+  RecodeEncoder,
   SystemNotification,
   UpdateStatus,
   VideoMetadata,
@@ -37,6 +38,8 @@ interface StagedVideo extends VideoMetadata {
   preset: DownloadPreset
   selectedVariantId: string
   fileNameOverride: string
+  trimStart: string
+  trimEnd: string
 }
 
 interface NoticeState {
@@ -340,6 +343,8 @@ function createStagedVideo(metadata: VideoMetadata): StagedVideo {
     preset: 'smart1080',
     selectedVariantId: pickSelectedVariantId(availableQualities),
     fileNameOverride: '',
+    trimStart: '',
+    trimEnd: '',
   }
 }
 
@@ -617,6 +622,7 @@ function App() {
   const [stagedVideos, setStagedVideos] = useState<StagedVideo[]>([])
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [renamingIds, setRenamingIds] = useState<Set<string>>(new Set())
+  const [trimmingIds, setTrimmingIds] = useState<Set<string>>(new Set())
   const [reloadingIds, setReloadingIds] = useState<Set<string>>(new Set())
   const [queue, setQueue] = useState<DownloadTask[]>([])
   const [settings, setSettings] = useState<AppSettings | null>(null)
@@ -1216,7 +1222,13 @@ function App() {
         currentVideos.map((video) => {
           if (video.id !== id) return video
           const fresh = createStagedVideo(metadata)
-          return { ...fresh, id: video.id, fileNameOverride: video.fileNameOverride }
+          return {
+            ...fresh,
+            id: video.id,
+            fileNameOverride: video.fileNameOverride,
+            trimStart: video.trimStart,
+            trimEnd: video.trimEnd,
+          }
         }),
       )
     } catch (error) {
@@ -1249,6 +1261,18 @@ function App() {
 
   function toggleRename(id: string): void {
     setRenamingIds((current) => {
+      const next = new Set(current)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
+
+  function toggleTrim(id: string): void {
+    setTrimmingIds((current) => {
       const next = new Set(current)
       if (next.has(id)) {
         next.delete(id)
@@ -1351,6 +1375,8 @@ function App() {
             variantId: audioOnly ? null : selectedQuality.id,
             variantSelector: audioOnly ? null : selectedQuality.selector,
             duration: video.duration,
+            trimStart: video.trimStart.trim() || null,
+            trimEnd: video.trimEnd.trim() || null,
           }
         }),
       })
@@ -1813,6 +1839,28 @@ function App() {
                       autoFocus
                     />
                   )}
+                  {trimmingIds.has(video.id) && (
+                    <div className="trim-editor">
+                      <span className="trim-icon" aria-hidden="true">✂</span>
+                      <input
+                        type="text"
+                        className="trim-input"
+                        placeholder={t.trimStartPlaceholder}
+                        value={video.trimStart}
+                        onChange={(e) => updateVideo(video.id, { trimStart: e.target.value })}
+                        autoFocus
+                      />
+                      <span className="trim-sep" aria-hidden="true">→</span>
+                      <input
+                        type="text"
+                        className="trim-input"
+                        placeholder={t.trimEndPlaceholder}
+                        value={video.trimEnd}
+                        onChange={(e) => updateVideo(video.id, { trimEnd: e.target.value })}
+                      />
+                      <span className="trim-hint">{t.trimHint}</span>
+                    </div>
+                  )}
                   {!audioOnly && (
                     <div className="quality-strip">
                       {video.availableQualities.map((quality) => (
@@ -1847,6 +1895,12 @@ function App() {
                     title={t.renameFileTitle}
                     onClick={() => toggleRename(video.id)}
                   >✎</button>
+                  <button
+                    className={`round-action ${trimmingIds.has(video.id) || video.trimStart.trim() || video.trimEnd.trim() ? 'active' : ''}`}
+                    type="button"
+                    title={t.trimTitle}
+                    onClick={() => toggleTrim(video.id)}
+                  >✂</button>
                   <button className="round-action" type="button" title={t.downloadNowTitle} onClick={() => void startDownload(new Set([video.id]))}>↓</button>
                   <button className="round-action danger-action" type="button" title={t.removeFromListTitle} onClick={() => removeVideo(video.id)}>×</button>
                 </div>
@@ -2069,6 +2123,41 @@ function App() {
                   <span className="switch-text">{t.forceH264}</span>
                 </label>
                 <small>{t.forceH264Note}</small>
+              </div>
+
+              <div className="settings-auto-row">
+                <label className="field field-inline">
+                  <span className="switch-text">{t.recodeEncoderLabel}</span>
+                  <select
+                    value={settings?.recodeEncoder ?? 'auto'}
+                    onChange={(event) =>
+                      void updateSettings({ recodeEncoder: event.target.value as RecodeEncoder })
+                    }
+                    disabled={!settings}
+                  >
+                    <option value="auto">{t.recodeAuto}</option>
+                    <option value="gpu">{t.recodeGpu}</option>
+                    <option value="cpu">{t.recodeCpu}</option>
+                  </select>
+                </label>
+                <small>{t.recodeEncoderNote}</small>
+              </div>
+
+              <div className="settings-auto-row">
+                <label className="switch-line">
+                  <input
+                    className="switch-input"
+                    type="checkbox"
+                    checked={settings?.embedMetadata ?? true}
+                    onChange={(event) => void updateSettings({ embedMetadata: event.target.checked })}
+                    disabled={!settings}
+                  />
+                  <span className="switch-track" aria-hidden="true">
+                    <span className="switch-thumb" />
+                  </span>
+                  <span className="switch-text">{t.embedMetadata}</span>
+                </label>
+                <small>{t.embedMetadataNote}</small>
               </div>
 
               <div className="settings-section-label">{t.outputFolder}</div>

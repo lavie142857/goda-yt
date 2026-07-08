@@ -14,6 +14,10 @@ export type YtDlpAutoUpdateMode = 'weekly' | 'on-start'
 
 export type AppLanguage = 'vi' | 'en'
 
+// Which encoder to use when re-encoding >1080p video to H.264. 'auto' picks the
+// GPU (NVENC/QSV/AMF) when available and falls back to the CPU (libx264).
+export type RecodeEncoder = 'auto' | 'gpu' | 'cpu'
+
 export type AuthMode = 'public' | 'auto' | 'cookies'
 
 export type CookiesBrowser = 'none' | 'chrome' | 'edge' | 'firefox' | 'brave'
@@ -57,6 +61,10 @@ export interface DownloadRequest {
   variantId?: string | null
   variantSelector?: string | null
   duration?: number | null
+  // Optional clip range (HH:MM:SS or MM:SS). When set, only this section is
+  // downloaded via yt-dlp --download-sections.
+  trimStart?: string | null
+  trimEnd?: string | null
 }
 
 export interface DownloadProgress {
@@ -100,6 +108,8 @@ export interface AppSettings {
   userEmail: string
   lastVersion: string
   forceH264: boolean
+  recodeEncoder: RecodeEncoder
+  embedMetadata: boolean
 }
 
 export interface QueueControlState {
@@ -116,6 +126,8 @@ export interface DownloadURLWithPreset {
   variantId?: string | null
   variantSelector?: string | null
   duration?: number | null
+  trimStart?: string | null
+  trimEnd?: string | null
 }
 
 export interface VideoMetadata {

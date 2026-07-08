@@ -28,6 +28,12 @@ export function resolveFfmpegLocation(): string | null {
   return ffmpeg ? path.dirname(ffmpeg) : null
 }
 
+// Optional multi-connection downloader. Present -> yt-dlp uses it for faster,
+// parallel downloads; absent -> yt-dlp falls back to its built-in downloader.
+export function resolveAria2cPath(): string | null {
+  return resolveBinFile('aria2c.exe')
+}
+
 export function resolveNodeRuntimeSpec(): string | null {
   const fromEnv = process.env.YTVIBEZ_NODE_PATH?.trim()
   if (fromEnv) {

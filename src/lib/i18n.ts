@@ -88,6 +88,17 @@ export interface Messages {
   autoUpdateYtDlp: string
   forceH264: string
   forceH264Note: string
+  recodeEncoderLabel: string
+  recodeAuto: string
+  recodeGpu: string
+  recodeCpu: string
+  recodeEncoderNote: string
+  embedMetadata: string
+  embedMetadataNote: string
+  trimTitle: string
+  trimStartPlaceholder: string
+  trimEndPlaceholder: string
+  trimHint: string
   updateSchedule: string
   weekly: string
   onStart: string
@@ -349,6 +360,17 @@ const vi: Messages = {
   autoUpdateYtDlp: 'Tự cập nhật yt-dlp',
   forceH264: 'Tương thích Premiere (ép H.264 cho >1080p)',
   forceH264Note: 'Mặc định bật để file >1080p/4K import tốt vào Premiere/trình biên tập. Có thể tắt nếu ưu tiên tải nhanh và chỉ cần xem (giữ VP9/AV1).',
+  recodeEncoderLabel: 'Bộ mã hóa khi re-encode',
+  recodeAuto: 'Tự động (ưu tiên GPU)',
+  recodeGpu: 'GPU (nhanh)',
+  recodeCpu: 'CPU (chất lượng)',
+  recodeEncoderNote: 'Khi ép H.264 cho file >1080p: GPU (NVENC/QSV) nhanh hơn nhiều với 4K; CPU (libx264) chậm hơn nhưng chất lượng/tương thích cao nhất. Tự động sẽ dùng GPU nếu máy hỗ trợ.',
+  embedMetadata: 'Nhúng thumbnail + thông tin vào file',
+  embedMetadataNote: 'Gắn ảnh thumbnail làm cover và thông tin (tiêu đề, kênh...) vào file tải về.',
+  trimTitle: 'Cắt đoạn (tải 1 khúc)',
+  trimStartPlaceholder: 'Bắt đầu (vd 0:30)',
+  trimEndPlaceholder: 'Kết thúc (vd 1:45)',
+  trimHint: 'Để trống = từ đầu / đến hết',
   updateSchedule: 'Lịch cập nhật',
   weekly: 'Hàng tuần',
   onStart: 'Khi mở app',
@@ -610,6 +632,17 @@ const en: Messages = {
   autoUpdateYtDlp: 'Auto-update yt-dlp',
   forceH264: 'Editor-compatible (re-encode >1080p to H.264)',
   forceH264Note: 'Enabled by default so >1080p/4K imports cleanly into Premiere/editors. Turn off when download speed matters more and you only need playback (keeps VP9/AV1).',
+  recodeEncoderLabel: 'Re-encode with',
+  recodeAuto: 'Auto (prefer GPU)',
+  recodeGpu: 'GPU (fast)',
+  recodeCpu: 'CPU (quality)',
+  recodeEncoderNote: 'When re-encoding >1080p to H.264: GPU (NVENC/QSV) is far faster for 4K; CPU (libx264) is slower but highest quality/compatibility. Auto uses the GPU when your machine supports it.',
+  embedMetadata: 'Embed thumbnail + metadata into file',
+  embedMetadataNote: 'Attaches the thumbnail as cover art and writes info (title, uploader...) into the downloaded file.',
+  trimTitle: 'Trim (download a clip)',
+  trimStartPlaceholder: 'Start (e.g. 0:30)',
+  trimEndPlaceholder: 'End (e.g. 1:45)',
+  trimHint: 'Blank = from start / to end',
   updateSchedule: 'Update schedule',
   weekly: 'Weekly',
   onStart: 'On app start',
