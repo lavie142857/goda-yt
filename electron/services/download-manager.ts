@@ -231,6 +231,8 @@ export class DownloadManager {
           variantSelector: item.variantSelector,
           outputDir: item.outputDir,
           duration: item.duration,
+          trimStart: item.trimStart,
+          trimEnd: item.trimEnd,
         },
         status: 'pending',
         retryCount: 0,
