@@ -11,6 +11,7 @@ import type {
   NetworkStatus,
   QueueControlState,
   OutputFormat,
+  RecodeEncoder,
   SystemNotification,
   UpdateStatus,
   VideoMetadata,
@@ -37,6 +38,8 @@ interface StagedVideo extends VideoMetadata {
   preset: DownloadPreset
   selectedVariantId: string
   fileNameOverride: string
+  trimStart: string
+  trimEnd: string
 }
 
 interface NoticeState {
@@ -340,6 +343,8 @@ function createStagedVideo(metadata: VideoMetadata): StagedVideo {
     preset: 'smart1080',
     selectedVariantId: pickSelectedVariantId(availableQualities),
     fileNameOverride: '',
+    trimStart: '',
+    trimEnd: '',
   }
 }
 
@@ -421,7 +426,25 @@ function buildDownloadFileName(video: StagedVideo, selectedQuality: VideoQuality
     ? 'MP3'
     : normalizeQualityTag(selectedQuality.label)
 
-  return appendTagIfMissing(baseTitle, qualityTag)
+  let name = appendTagIfMissing(baseTitle, qualityTag)
+  const trimTag = formatTrimTag(video.trimStart, video.trimEnd)
+  if (trimTag) {
+    name = `${name} [${trimTag}]`
+  }
+  return name
+}
+
+// Filesystem-safe trim marker for the output filename, e.g. "cut 0-05~1-30.500".
+// Colons (invalid on Windows) become dashes; the range keeps millisecond detail.
+function formatTrimTag(trimStart?: string | null, trimEnd?: string | null): string | null {
+  const start = trimStart?.trim()
+  const end = trimEnd?.trim()
+  if (!start && !end) {
+    return null
+  }
+
+  const safe = (value: string): string => value.replace(/:/g, '-').replace(/[^\d.\-]/g, '')
+  return `cut ${start ? safe(start) : '0'}~${end ? safe(end) : 'end'}`
 }
 
 function buildDownloadVariantKey(input: {
@@ -430,9 +453,14 @@ function buildDownloadVariantKey(input: {
   quality?: string
   format?: OutputFormat
   variantSelector?: string | null
+  trimStart?: string | null
+  trimEnd?: string | null
 }): string {
   const videoKey = canonicalizeVideoKey(input.url)
   const isYouTube = videoKey.startsWith('youtube:')
+  const trim = (input.trimStart?.trim() || input.trimEnd?.trim())
+    ? `${input.trimStart?.trim() ?? ''}-${input.trimEnd?.trim() ?? ''}`
+    : ''
 
   return [
     videoKey,
@@ -440,6 +468,7 @@ function buildDownloadVariantKey(input: {
     isYouTube ? (input.quality ?? '') : '',
     input.format ?? '',
     isYouTube ? (input.variantSelector ?? '') : '',
+    trim,
   ].join('|')
 }
 
@@ -536,6 +565,118 @@ function handleThumbError(event: SyntheticEvent<HTMLImageElement>): void {
   img.src = THUMB_FALLBACK
 }
 
+// --- Trim time helpers (millisecond-precise) ---
+
+// Parse "H:MM:SS.mmm" / "MM:SS.mmm" / "SS.mmm" / plain seconds into seconds.
+// Returns null for empty/invalid input.
+function parseTimeToSeconds(value: string): number | null {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  const parts = trimmed.split(':').map((part) => part.trim())
+  if (parts.length > 3 || parts.some((part) => part === '' || Number.isNaN(Number(part)))) {
+    return null
+  }
+
+  const seconds = parts.reduce((acc, part) => acc * 60 + Number(part), 0)
+  return seconds >= 0 ? seconds : null
+}
+
+// Format seconds as "M:SS" (or "H:MM:SS"), appending ".mmm" only when there are
+// sub-second milliseconds, so whole-second cuts stay clean.
+function formatSecondsToTime(totalSeconds: number): string {
+  const safe = Number.isFinite(totalSeconds) && totalSeconds > 0 ? totalSeconds : 0
+  const ms = Math.round((safe % 1) * 1000)
+  const whole = Math.floor(safe) + (ms === 1000 ? 1 : 0)
+  const millis = ms === 1000 ? 0 : ms
+  const hours = Math.floor(whole / 3600)
+  const minutes = Math.floor((whole % 3600) / 60)
+  const secs = whole % 60
+  const pad = (n: number, len = 2): string => String(n).padStart(len, '0')
+  const base = hours > 0 ? `${hours}:${pad(minutes)}:${pad(secs)}` : `${minutes}:${pad(secs)}`
+  return millis > 0 ? `${base}.${pad(millis, 3)}` : base
+}
+
+// Dual-handle range slider over a video's duration. Dragging a handle reports the
+// new start/end (in seconds); the parent stores them as time strings. Falls back
+// to nothing when the duration is unknown (caller shows plain inputs instead).
+function TrimSlider(props: {
+  duration: number
+  startSec: number
+  endSec: number
+  onChange: (startSec: number, endSec: number) => void
+}) {
+  const { duration, startSec, endSec, onChange } = props
+  const trackRef = useRef<HTMLDivElement>(null)
+  const draggingRef = useRef<'start' | 'end' | null>(null)
+  const startPct = duration > 0 ? Math.min(100, (startSec / duration) * 100) : 0
+  const endPct = duration > 0 ? Math.min(100, (endSec / duration) * 100) : 100
+
+  const timeFromClientX = useCallback(
+    (clientX: number): number => {
+      const track = trackRef.current
+      if (!track) {
+        return 0
+      }
+      const rect = track.getBoundingClientRect()
+      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
+      return ratio * duration
+    },
+    [duration],
+  )
+
+  useEffect(() => {
+    const onMove = (event: PointerEvent) => {
+      if (!draggingRef.current) {
+        return
+      }
+      const time = timeFromClientX(event.clientX)
+      if (draggingRef.current === 'start') {
+        onChange(Math.min(time, endSec), endSec)
+      } else {
+        onChange(startSec, Math.max(time, startSec))
+      }
+    }
+    const onUp = () => {
+      draggingRef.current = null
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+  }, [startSec, endSec, timeFromClientX, onChange])
+
+  return (
+    <div className="trim-slider" ref={trackRef}>
+      <div className="trim-slider-fill" style={{ left: `${startPct}%`, width: `${Math.max(0, endPct - startPct)}%` }} />
+      <div
+        className="trim-slider-handle"
+        style={{ left: `${startPct}%` }}
+        onPointerDown={() => {
+          draggingRef.current = 'start'
+        }}
+        role="slider"
+        aria-label="start"
+        tabIndex={0}
+      />
+      <div
+        className="trim-slider-handle"
+        style={{ left: `${endPct}%` }}
+        onPointerDown={() => {
+          draggingRef.current = 'end'
+        }}
+        role="slider"
+        aria-label="end"
+        tabIndex={0}
+      />
+    </div>
+  )
+}
+
 // Memoized so progress ticks (every 250ms) only re-render the rows whose data
 // actually changed, not the whole queue. Props are primitives + stable callbacks.
 const QueueRow = memo(function QueueRow(props: QueueRowProps) {
@@ -617,6 +758,7 @@ function App() {
   const [stagedVideos, setStagedVideos] = useState<StagedVideo[]>([])
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [renamingIds, setRenamingIds] = useState<Set<string>>(new Set())
+  const [trimmingIds, setTrimmingIds] = useState<Set<string>>(new Set())
   const [reloadingIds, setReloadingIds] = useState<Set<string>>(new Set())
   const [queue, setQueue] = useState<DownloadTask[]>([])
   const [settings, setSettings] = useState<AppSettings | null>(null)
@@ -1216,7 +1358,13 @@ function App() {
         currentVideos.map((video) => {
           if (video.id !== id) return video
           const fresh = createStagedVideo(metadata)
-          return { ...fresh, id: video.id, fileNameOverride: video.fileNameOverride }
+          return {
+            ...fresh,
+            id: video.id,
+            fileNameOverride: video.fileNameOverride,
+            trimStart: video.trimStart,
+            trimEnd: video.trimEnd,
+          }
         }),
       )
     } catch (error) {
@@ -1249,6 +1397,18 @@ function App() {
 
   function toggleRename(id: string): void {
     setRenamingIds((current) => {
+      const next = new Set(current)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
+
+  function toggleTrim(id: string): void {
+    setTrimmingIds((current) => {
       const next = new Set(current)
       if (next.has(id)) {
         next.delete(id)
@@ -1293,6 +1453,8 @@ function App() {
             quality: task.request.quality,
             format: task.request.format,
             variantSelector: task.request.variantSelector,
+            trimStart: task.request.trimStart,
+            trimEnd: task.request.trimEnd,
           }),
         ),
     )
@@ -1312,6 +1474,8 @@ function App() {
         quality: audioOnly ? undefined : selectedQuality.label,
         format: audioOnly ? undefined : settings?.defaultFormat ?? 'mp4',
         variantSelector: audioOnly ? null : selectedQuality.selector,
+        trimStart: video.trimStart,
+        trimEnd: video.trimEnd,
       })
 
       if (existingItems.has(itemKey) || seenIncoming.has(itemKey)) {
@@ -1351,6 +1515,8 @@ function App() {
             variantId: audioOnly ? null : selectedQuality.id,
             variantSelector: audioOnly ? null : selectedQuality.selector,
             duration: video.duration,
+            trimStart: video.trimStart.trim() || null,
+            trimEnd: video.trimEnd.trim() || null,
           }
         }),
       })
@@ -1813,6 +1979,63 @@ function App() {
                       autoFocus
                     />
                   )}
+                  {trimmingIds.has(video.id) && (() => {
+                    const dur = video.duration ?? 0
+                    const startSec = parseTimeToSeconds(video.trimStart) ?? 0
+                    const endSec = parseTimeToSeconds(video.trimEnd) ?? dur
+                    const clipLen = dur > 0 && endSec > startSec ? formatSecondsToTime(endSec - startSec) : null
+                    const hasTrim = Boolean(video.trimStart.trim() || video.trimEnd.trim())
+                    const startBad = video.trimStart.trim() !== '' && parseTimeToSeconds(video.trimStart) === null
+                    const endBad = video.trimEnd.trim() !== '' && parseTimeToSeconds(video.trimEnd) === null
+                    const rangeBad = !startBad && !endBad && video.trimEnd.trim() !== '' && startSec >= endSec
+                    return (
+                      <div className="trim-editor">
+                        {dur > 0 && (
+                          <TrimSlider
+                            duration={dur}
+                            startSec={startSec}
+                            endSec={endSec}
+                            onChange={(s, e) =>
+                              updateVideo(video.id, {
+                                trimStart: s <= 0 ? '' : formatSecondsToTime(s),
+                                trimEnd: e >= dur ? '' : formatSecondsToTime(e),
+                              })
+                            }
+                          />
+                        )}
+                        <div className="trim-fields">
+                          <span className="trim-icon" aria-hidden="true">✂</span>
+                          <input
+                            type="text"
+                            className={`trim-input ${startBad || rangeBad ? 'trim-input-invalid' : ''}`}
+                            placeholder={t.trimStartPlaceholder}
+                            value={video.trimStart}
+                            onChange={(e) => updateVideo(video.id, { trimStart: e.target.value })}
+                            autoFocus
+                          />
+                          <span className="trim-sep" aria-hidden="true">→</span>
+                          <input
+                            type="text"
+                            className={`trim-input ${endBad || rangeBad ? 'trim-input-invalid' : ''}`}
+                            placeholder={t.trimEndPlaceholder}
+                            value={video.trimEnd}
+                            onChange={(e) => updateVideo(video.id, { trimEnd: e.target.value })}
+                          />
+                          {clipLen && <span className="trim-duration">{t.clipLength(clipLen)}</span>}
+                          {hasTrim && (
+                            <button
+                              type="button"
+                              className="trim-reset"
+                              onClick={() => updateVideo(video.id, { trimStart: '', trimEnd: '' })}
+                            >
+                              {t.trimReset}
+                            </button>
+                          )}
+                        </div>
+                        <span className="trim-hint">{t.trimHint}</span>
+                      </div>
+                    )
+                  })()}
                   {!audioOnly && (
                     <div className="quality-strip">
                       {video.availableQualities.map((quality) => (
@@ -1847,6 +2070,12 @@ function App() {
                     title={t.renameFileTitle}
                     onClick={() => toggleRename(video.id)}
                   >✎</button>
+                  <button
+                    className={`round-action ${trimmingIds.has(video.id) || video.trimStart.trim() || video.trimEnd.trim() ? 'active' : ''}`}
+                    type="button"
+                    title={t.trimTitle}
+                    onClick={() => toggleTrim(video.id)}
+                  >✂</button>
                   <button className="round-action" type="button" title={t.downloadNowTitle} onClick={() => void startDownload(new Set([video.id]))}>↓</button>
                   <button className="round-action danger-action" type="button" title={t.removeFromListTitle} onClick={() => removeVideo(video.id)}>×</button>
                 </div>
@@ -2069,6 +2298,41 @@ function App() {
                   <span className="switch-text">{t.forceH264}</span>
                 </label>
                 <small>{t.forceH264Note}</small>
+              </div>
+
+              <div className="settings-auto-row">
+                <label className="field field-inline">
+                  <span className="switch-text">{t.recodeEncoderLabel}</span>
+                  <select
+                    value={settings?.recodeEncoder ?? 'auto'}
+                    onChange={(event) =>
+                      void updateSettings({ recodeEncoder: event.target.value as RecodeEncoder })
+                    }
+                    disabled={!settings}
+                  >
+                    <option value="auto">{t.recodeAuto}</option>
+                    <option value="gpu">{t.recodeGpu}</option>
+                    <option value="cpu">{t.recodeCpu}</option>
+                  </select>
+                </label>
+                <small>{t.recodeEncoderNote}</small>
+              </div>
+
+              <div className="settings-auto-row">
+                <label className="switch-line">
+                  <input
+                    className="switch-input"
+                    type="checkbox"
+                    checked={settings?.embedMetadata ?? true}
+                    onChange={(event) => void updateSettings({ embedMetadata: event.target.checked })}
+                    disabled={!settings}
+                  />
+                  <span className="switch-track" aria-hidden="true">
+                    <span className="switch-thumb" />
+                  </span>
+                  <span className="switch-text">{t.embedMetadata}</span>
+                </label>
+                <small>{t.embedMetadataNote}</small>
               </div>
 
               <div className="settings-section-label">{t.outputFolder}</div>

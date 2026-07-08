@@ -14,6 +14,8 @@ export type YtDlpAutoUpdateMode = 'weekly' | 'on-start'
 
 export type AppLanguage = 'vi' | 'en'
 
+export type RecodeEncoder = 'auto' | 'gpu' | 'cpu'
+
 export type AuthMode = 'public' | 'auto' | 'cookies'
 
 export type CookiesBrowser = 'none' | 'chrome' | 'edge' | 'firefox' | 'brave'
@@ -61,6 +63,8 @@ export interface DownloadTask {
     variantId?: string | null
     variantSelector?: string | null
     duration?: number | null
+    trimStart?: string | null
+    trimEnd?: string | null
   }
   status: DownloadStatus
   retryCount: number
@@ -96,6 +100,8 @@ export interface AppSettings {
   userEmail: string
   lastVersion: string
   forceH264: boolean
+  recodeEncoder: RecodeEncoder
+  embedMetadata: boolean
 }
 
 export interface QueueControlState {
@@ -154,6 +160,8 @@ export interface DownloadURLWithPreset {
   variantId?: string | null
   variantSelector?: string | null
   duration?: number | null
+  trimStart?: string | null
+  trimEnd?: string | null
 }
 
 export interface VideoMetadata {

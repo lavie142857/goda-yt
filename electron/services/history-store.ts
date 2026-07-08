@@ -7,8 +7,17 @@ interface HistoryEntry {
   savedAt: number
 }
 
+interface HistoryFile {
+  version: number
+  entries: Record<string, HistoryEntry>
+}
+
 const HISTORY_FILE = 'download-history.json'
 const MAX_ENTRIES = 1000
+// Bump whenever the reuse-key format changes. Entries written under an older
+// scheme are discarded on load so a stale key can never reuse the wrong file.
+// v2: reuse keys now encode the trim (clip) range.
+const SCHEMA_VERSION = 2
 
 // Persistent record of completed downloads, keyed by video + quality, so the
 // same video at the same quality can be re-used (copied) instead of re-downloaded.
@@ -41,11 +50,20 @@ export class HistoryStore {
   }
 
   private load(): Record<string, HistoryEntry> {
-    const parsed = readJsonWithBackup<Record<string, HistoryEntry>>(this.filePath)
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed
+    const parsed = readJsonWithBackup<Partial<HistoryFile>>(this.filePath)
+    if (
+      parsed
+      && typeof parsed === 'object'
+      && !Array.isArray(parsed)
+      && parsed.version === SCHEMA_VERSION
+      && parsed.entries
+      && typeof parsed.entries === 'object'
+    ) {
+      return parsed.entries
     }
 
+    // Missing/old/unknown schema: discard so keys computed under a different
+    // scheme can't reuse a wrong file (e.g. a full video reusing a trimmed clip).
     return {}
   }
 
@@ -63,7 +81,8 @@ export class HistoryStore {
 
   private persist(): void {
     try {
-      writeJsonAtomically(this.filePath, this.entries)
+      const payload: HistoryFile = { version: SCHEMA_VERSION, entries: this.entries }
+      writeJsonAtomically(this.filePath, payload)
     } catch {
       // Best-effort; failing to persist history must not break downloads.
     }

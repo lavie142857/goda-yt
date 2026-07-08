@@ -4,11 +4,13 @@ import { readdirSync, statSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import {
   pushJsRuntimeArgs,
+  resolveAria2cPath,
   resolveFfmpegLocation,
   resolveNodeRuntimeSpec,
   resolveYtDlpPath,
 } from './binaries.js'
 import { detectPlatform } from './platform.js'
+import { resolveH264RecodeArgs } from './gpu.js'
 import type { CookiesHandle } from './auth-store.js'
 import type {
   AppSettings,
@@ -16,6 +18,7 @@ import type {
   DownloadRequest,
   OutputFormat,
   QualityOption,
+  RecodeEncoder,
   YtDlpProbe,
   YtDlpUpdateResult,
 } from '../types.js'
@@ -155,6 +158,11 @@ export class YtDlpService {
     const platform = detectPlatform(request.url)
     const outputDir = request.outputDir?.trim() || options.settings.outputDir
     const expectsRecode = this.willRecodeVideo(request, options.settings)
+    // Trimming re-encodes (keyframe-accurate cut) and yt-dlp emits ffmpeg frame=/
+    // time= progress instead of "[download] %", so reuse the recode progress path
+    // and measure against the clip length rather than the full video.
+    const trimSection = this.buildDownloadSection(request.trimStart, request.trimEnd)
+    const clipDurationSeconds = trimSection ? this.computeClipDurationSeconds(request) : null
     const runWithArgs = async (args: string[]): Promise<void> => {
       await new Promise<void>((resolve, reject) => {
         const child = spawn(executable, args, {
@@ -207,8 +215,9 @@ export class YtDlpService {
             return
           }
 
-          if (recodeStarted || expectsRecode) {
-            const recodeProgress = this.extractRecodeProgress(line, request.duration, recodeProgressState)
+          if (recodeStarted || expectsRecode || trimSection) {
+            const progressDuration = trimSection ? clipDurationSeconds : request.duration
+            const recodeProgress = this.extractRecodeProgress(line, progressDuration, recodeProgressState)
             if (recodeProgress) {
               options.onProgress(recodeProgress)
               return
@@ -325,6 +334,28 @@ export class YtDlpService {
         ))
       } catch (error) {
         let details = (error as Error).message
+
+        // A hardware (GPU) encoder failed the recode at runtime -> retry once
+        // forcing the CPU encoder so the download still completes.
+        if (this.usesGpuRecode(request, options.settings) && this.isGpuEncoderError(details)) {
+          try {
+            await runWithArgs(this.buildArgs(
+              request,
+              options.settings,
+              {
+                relaxed: false,
+                platform,
+                authAttempt,
+                tiktokProfile: this.getDefaultTikTokExtractorProfile(platform),
+                forceCpuRecode: true,
+              },
+              cookiesPath,
+            ))
+            return
+          } catch (cpuError) {
+            details = (cpuError as Error).message
+          }
+        }
 
         if (this.shouldRetryWithRelaxedSelector(details, platform)) {
           try {
@@ -488,6 +519,7 @@ export class YtDlpService {
       platform: DownloadPlatform | null
       authAttempt: DownloadAuthAttempt
       tiktokProfile?: TikTokExtractorProfile
+      forceCpuRecode?: boolean
     },
     cookiesPath: string | null,
   ): string[] {
@@ -541,13 +573,113 @@ export class YtDlpService {
       args.push('--cookies-from-browser', settings.cookiesBrowser)
     }
 
+    // Clip range (trim): download only the requested section. Uses keyframe-accurate
+    // cuts. Note: aria2c can't do partial downloads, so trimming disables it below.
+    const section = this.buildDownloadSection(request.trimStart, request.trimEnd)
+    if (section) {
+      args.push('--download-sections', section)
+      args.push('--force-keyframes-at-cuts')
+    }
+
+    // Faster multi-connection downloads via aria2c when bundled. Rate-limit-sensitive
+    // platforms get fewer connections to avoid soft-blocks. Skipped while trimming.
+    const aria2c = resolveAria2cPath()
+    if (aria2c && !section) {
+      // Moderate parallelism: fast without looking abusive. Rate-limit-sensitive
+      // platforms (TikTok/FB/IG) get fewer connections to avoid soft-blocks.
+      const connections = options.platform === 'youtube' ? 8 : 4
+      args.push('--downloader', aria2c)
+      args.push('--downloader-args', `aria2c:-x${connections} -s${connections} -k1M`)
+    }
+
+    // Write title/uploader/etc. into the file, and embed the thumbnail as cover
+    // art. Thumbnail embedding is only supported for some containers — forcing it
+    // on webm/avi FAILS the whole download, so gate it on the output format.
+    if (settings.embedMetadata) {
+      args.push('--embed-metadata')
+      if (this.supportsThumbnailEmbed(request, settings)) {
+        args.push('--embed-thumbnail')
+      }
+    }
+
+    // A GPU-encoder failure at runtime falls back to the CPU encoder on retry.
+    const recodeEncoder: RecodeEncoder = options.forceCpuRecode ? 'cpu' : settings.recodeEncoder
+
     pushJsRuntimeArgs(args)
     this.pushTikTokExtractorArgs(args, options.platform, options.tiktokProfile)
-    this.pushRequestArgs(args, request, settings.defaultFormat, settings.forceH264, options)
+    this.pushRequestArgs(args, request, settings.defaultFormat, settings.forceH264, recodeEncoder, options)
 
     args.push(request.url)
 
     return args
+  }
+
+  // yt-dlp can only embed a thumbnail into some containers (mp3, mkv, m4a,
+  // mp4/m4v/mov, ogg/opus/flac). Forcing it on webm/avi fails the whole download.
+  private supportsThumbnailEmbed(request: DownloadRequest, settings: AppSettings): boolean {
+    if (request.preset === 'audioMp3' || request.preset === 'audioM4a') {
+      return true // mp3 / m4a both support embedding
+    }
+
+    const format = request.format ?? settings.defaultFormat
+    return format === 'mp4' || format === 'mkv' || format === 'mov'
+  }
+
+  // Build a yt-dlp --download-sections value ("*start-end") from optional trim
+  // timestamps. Returns null when neither is set (download the whole video).
+  private buildDownloadSection(
+    trimStart?: string | null,
+    trimEnd?: string | null,
+  ): string | null {
+    const start = trimStart?.trim()
+    const end = trimEnd?.trim()
+    if (!start && !end) {
+      return null
+    }
+
+    // Reject unparseable or illogical (start >= end) ranges rather than passing
+    // garbage to yt-dlp, which would fail the whole download with a cryptic error.
+    const startSec = start ? this.parseTimestampSeconds(start) : 0
+    const endSec = end ? this.parseTimestampSeconds(end) : null
+    if ((start && startSec === null) || (end && endSec === null)) {
+      return null
+    }
+    if (startSec !== null && endSec !== null && startSec >= endSec) {
+      return null
+    }
+
+    return `*${start || '0'}-${end || 'inf'}`
+  }
+
+  // Length of the trimmed clip in seconds, for progress. End defaults to the full
+  // video duration; returns null when it can't be determined.
+  private computeClipDurationSeconds(request: DownloadRequest): number | null {
+    const start = this.parseTimestampSeconds(request.trimStart) ?? 0
+    const fullDuration =
+      typeof request.duration === 'number' && Number.isFinite(request.duration) ? request.duration : null
+    const end = this.parseTimestampSeconds(request.trimEnd) ?? fullDuration
+    if (end === null) {
+      return null
+    }
+
+    const clip = end - start
+    return clip > 0 ? clip : null
+  }
+
+  // Parse "H:MM:SS.mmm" / "MM:SS.mmm" / "SS.mmm" / plain seconds into seconds.
+  private parseTimestampSeconds(value?: string | null): number | null {
+    const trimmed = value?.trim()
+    if (!trimmed) {
+      return null
+    }
+
+    const parts = trimmed.split(':').map((part) => part.trim())
+    if (parts.length > 3 || parts.some((part) => part === '' || Number.isNaN(Number(part)))) {
+      return null
+    }
+
+    const seconds = parts.reduce((acc, part) => acc * 60 + Number(part), 0)
+    return Number.isFinite(seconds) && seconds >= 0 ? seconds : null
   }
 
   private pushRequestArgs(
@@ -555,6 +687,7 @@ export class YtDlpService {
     request: DownloadRequest,
     defaultFormat: OutputFormat,
     forceH264: boolean,
+    recodeEncoder: RecodeEncoder,
     options: { relaxed: boolean; platform: DownloadPlatform | null },
   ): void {
     const requestedFormat = request.format ?? defaultFormat
@@ -587,12 +720,12 @@ export class YtDlpService {
             // Above 1080p YouTube has no H.264, so the video is VP9/AV1 — unreadable
             // in many editors (Premiere). Re-encode to H.264. Merge to MKV first so
             // the recode actually runs (recode->mp4 is skipped if already an mp4).
-            // 'veryfast' keeps 4K re-encodes practical (default 'medium' is far slower).
+            // Encoder honors the user's GPU/CPU choice (GPU makes 4K re-encodes fast).
             args.push('--merge-output-format', 'mkv')
             args.push('--recode-video', 'mp4')
             args.push(
               '--postprocessor-args',
-              'VideoConvertor:-preset veryfast -stats -stats_period 0.5 -progress pipe:2',
+              `VideoConvertor:${resolveH264RecodeArgs(recodeEncoder)} -stats -stats_period 0.5 -progress pipe:2`,
             )
           } else {
             args.push('--merge-output-format', 'mp4')
@@ -790,6 +923,19 @@ export class YtDlpService {
       && requestedFormat === 'mp4'
       && requestedHeight
       && requestedHeight > 1080,
+    )
+  }
+
+  // True when this download would re-encode using a hardware (GPU) encoder, i.e.
+  // a retry forcing the CPU encoder could rescue a GPU failure.
+  private usesGpuRecode(request: DownloadRequest, settings: AppSettings): boolean {
+    return settings.recodeEncoder !== 'cpu' && this.willRecodeVideo(request, settings)
+  }
+
+  // Recognise a hardware-encoder failure so we can retry on the CPU encoder.
+  private isGpuEncoderError(raw: string): boolean {
+    return /nvenc|h264_qsv|h264_amf|qsv|cuda|cuvid|impossible to convert|error initializing output stream|error while opening encoder|openencodesessionex|no capable devices|hardware/i.test(
+      raw,
     )
   }
 
