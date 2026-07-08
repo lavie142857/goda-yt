@@ -52,7 +52,10 @@ export class DownloadManager {
         ? (this.settingsStore.get().forceH264 ? '|h264' : '|vp9')
         : ''
 
-    return `${videoKey}|${request.preset}|${quality}|${format}${codecTag}`
+    // Only append the trim segment when trimming, so full-video downloads keep the
+    // exact same key as before (existing reuse history stays valid).
+    const trim = this.trimKey(request)
+    return `${videoKey}|${request.preset}|${quality}|${format}${codecTag}${trim ? `|${trim}` : ''}`
   }
 
   private queueKey(request: DownloadRequest): string {
@@ -67,7 +70,17 @@ export class DownloadManager {
       quality,
       request.format ?? '',
       variantSelector,
+      this.trimKey(request),
     ].join('|')
+  }
+
+  // A trimmed clip is a different file from the full video (and from a different
+  // clip of the same video), so the trim range is part of both the reuse and the
+  // dedup identity — otherwise a clip could reuse/collide with the wrong file.
+  private trimKey(request: DownloadRequest): string {
+    const start = request.trimStart?.trim() ?? ''
+    const end = request.trimEnd?.trim() ?? ''
+    return start || end ? `${start}-${end}` : ''
   }
 
   // If this exact (video, quality) was downloaded before and the file still

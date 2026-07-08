@@ -99,6 +99,8 @@ export interface Messages {
   trimStartPlaceholder: string
   trimEndPlaceholder: string
   trimHint: string
+  clipLength: (len: string) => string
+  trimReset: string
   updateSchedule: string
   weekly: string
   onStart: string
@@ -368,9 +370,11 @@ const vi: Messages = {
   embedMetadata: 'Nhúng thumbnail + thông tin vào file',
   embedMetadataNote: 'Gắn ảnh thumbnail làm cover và thông tin (tiêu đề, kênh...) vào file tải về.',
   trimTitle: 'Cắt đoạn (tải 1 khúc)',
-  trimStartPlaceholder: 'Bắt đầu (vd 0:30)',
-  trimEndPlaceholder: 'Kết thúc (vd 1:45)',
-  trimHint: 'Để trống = từ đầu / đến hết',
+  trimStartPlaceholder: 'Bắt đầu (vd 0:30.500)',
+  trimEndPlaceholder: 'Kết thúc (vd 1:45.250)',
+  trimHint: 'Kéo thanh hoặc gõ thời gian (đến mili giây). Để trống = từ đầu / đến hết.',
+  clipLength: (len: string) => `Độ dài: ${len}`,
+  trimReset: 'Xóa',
   updateSchedule: 'Lịch cập nhật',
   weekly: 'Hàng tuần',
   onStart: 'Khi mở app',
@@ -640,9 +644,11 @@ const en: Messages = {
   embedMetadata: 'Embed thumbnail + metadata into file',
   embedMetadataNote: 'Attaches the thumbnail as cover art and writes info (title, uploader...) into the downloaded file.',
   trimTitle: 'Trim (download a clip)',
-  trimStartPlaceholder: 'Start (e.g. 0:30)',
-  trimEndPlaceholder: 'End (e.g. 1:45)',
-  trimHint: 'Blank = from start / to end',
+  trimStartPlaceholder: 'Start (e.g. 0:30.500)',
+  trimEndPlaceholder: 'End (e.g. 1:45.250)',
+  trimHint: 'Drag the bar or type a time (millisecond precise). Blank = from start / to end.',
+  clipLength: (len: string) => `Length: ${len}`,
+  trimReset: 'Reset',
   updateSchedule: 'Update schedule',
   weekly: 'Weekly',
   onStart: 'On app start',

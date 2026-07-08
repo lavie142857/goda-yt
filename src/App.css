@@ -800,10 +800,76 @@ select option {
 /* Trim (clip range) editor — hidden until the ✂ button is toggled */
 .trim-editor {
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+}
+
+.trim-fields {
+  display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 6px;
   flex-wrap: wrap;
+}
+
+/* Dual-handle range slider */
+.trim-slider {
+  position: relative;
+  height: 22px;
+  border-radius: var(--radius-full);
+  background: var(--surface-muted);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.trim-slider-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--accent-soft);
+  border-top: 2px solid var(--accent);
+  border-bottom: 2px solid var(--accent);
+}
+
+.trim-slider-handle {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 22px;
+  transform: translate(-50%, -50%);
+  border-radius: 4px;
+  background: var(--accent);
+  box-shadow: var(--shadow-sm);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.trim-slider-handle:hover {
+  background: var(--accent-hover);
+}
+
+.trim-duration {
+  color: var(--accent);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.trim-reset {
+  padding: 2px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.trim-reset:hover {
+  color: var(--text);
+  border-color: var(--muted);
 }
 
 .trim-icon {
