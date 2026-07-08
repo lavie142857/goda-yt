@@ -592,9 +592,14 @@ export class YtDlpService {
       args.push('--downloader-args', `aria2c:-x${connections} -s${connections} -k1M`)
     }
 
-    // Embed the thumbnail as cover art + write title/uploader/etc. into the file.
+    // Write title/uploader/etc. into the file, and embed the thumbnail as cover
+    // art. Thumbnail embedding is only supported for some containers — forcing it
+    // on webm/avi FAILS the whole download, so gate it on the output format.
     if (settings.embedMetadata) {
-      args.push('--embed-metadata', '--embed-thumbnail')
+      args.push('--embed-metadata')
+      if (this.supportsThumbnailEmbed(request, settings)) {
+        args.push('--embed-thumbnail')
+      }
     }
 
     // A GPU-encoder failure at runtime falls back to the CPU encoder on retry.
@@ -607,6 +612,17 @@ export class YtDlpService {
     args.push(request.url)
 
     return args
+  }
+
+  // yt-dlp can only embed a thumbnail into some containers (mp3, mkv, m4a,
+  // mp4/m4v/mov, ogg/opus/flac). Forcing it on webm/avi fails the whole download.
+  private supportsThumbnailEmbed(request: DownloadRequest, settings: AppSettings): boolean {
+    if (request.preset === 'audioMp3' || request.preset === 'audioM4a') {
+      return true // mp3 / m4a both support embedding
+    }
+
+    const format = request.format ?? settings.defaultFormat
+    return format === 'mp4' || format === 'mkv' || format === 'mov'
   }
 
   // Build a yt-dlp --download-sections value ("*start-end") from optional trim
