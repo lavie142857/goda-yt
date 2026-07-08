@@ -819,37 +819,53 @@ select option {
 /* Dual-handle range slider */
 .trim-slider {
   position: relative;
-  height: 22px;
-  border-radius: var(--radius-full);
-  background: var(--surface-muted);
+  height: 26px;
+  display: flex;
+  align-items: center;
   cursor: pointer;
   touch-action: none;
 }
 
+.trim-slider::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--surface-muted);
+}
+
 .trim-slider-fill {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  background: var(--accent-soft);
-  border-top: 2px solid var(--accent);
-  border-bottom: 2px solid var(--accent);
+  top: 50%;
+  height: 5px;
+  transform: translateY(-50%);
+  border-radius: var(--radius-full);
+  background: var(--accent);
 }
 
 .trim-slider-handle {
   position: absolute;
   top: 50%;
-  width: 14px;
-  height: 22px;
+  width: 16px;
+  height: 16px;
   transform: translate(-50%, -50%);
-  border-radius: 4px;
-  background: var(--accent);
-  box-shadow: var(--shadow-sm);
-  cursor: ew-resize;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 3px solid var(--accent);
+  box-shadow: var(--shadow-md);
+  cursor: grab;
   touch-action: none;
+  transition: transform 0.1s var(--ease);
 }
 
 .trim-slider-handle:hover {
-  background: var(--accent-hover);
+  transform: translate(-50%, -50%) scale(1.18);
+}
+
+.trim-slider-handle:active {
+  cursor: grabbing;
 }
 
 .trim-duration {

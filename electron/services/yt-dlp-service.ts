@@ -158,6 +158,11 @@ export class YtDlpService {
     const platform = detectPlatform(request.url)
     const outputDir = request.outputDir?.trim() || options.settings.outputDir
     const expectsRecode = this.willRecodeVideo(request, options.settings)
+    // Trimming re-encodes (keyframe-accurate cut) and yt-dlp emits ffmpeg frame=/
+    // time= progress instead of "[download] %", so reuse the recode progress path
+    // and measure against the clip length rather than the full video.
+    const trimSection = this.buildDownloadSection(request.trimStart, request.trimEnd)
+    const clipDurationSeconds = trimSection ? this.computeClipDurationSeconds(request) : null
     const runWithArgs = async (args: string[]): Promise<void> => {
       await new Promise<void>((resolve, reject) => {
         const child = spawn(executable, args, {
@@ -210,8 +215,9 @@ export class YtDlpService {
             return
           }
 
-          if (recodeStarted || expectsRecode) {
-            const recodeProgress = this.extractRecodeProgress(line, request.duration, recodeProgressState)
+          if (recodeStarted || expectsRecode || trimSection) {
+            const progressDuration = trimSection ? clipDurationSeconds : request.duration
+            const recodeProgress = this.extractRecodeProgress(line, progressDuration, recodeProgressState)
             if (recodeProgress) {
               options.onProgress(recodeProgress)
               return
@@ -588,6 +594,37 @@ export class YtDlpService {
     }
 
     return `*${start || '0'}-${end || 'inf'}`
+  }
+
+  // Length of the trimmed clip in seconds, for progress. End defaults to the full
+  // video duration; returns null when it can't be determined.
+  private computeClipDurationSeconds(request: DownloadRequest): number | null {
+    const start = this.parseTimestampSeconds(request.trimStart) ?? 0
+    const fullDuration =
+      typeof request.duration === 'number' && Number.isFinite(request.duration) ? request.duration : null
+    const end = this.parseTimestampSeconds(request.trimEnd) ?? fullDuration
+    if (end === null) {
+      return null
+    }
+
+    const clip = end - start
+    return clip > 0 ? clip : null
+  }
+
+  // Parse "H:MM:SS.mmm" / "MM:SS.mmm" / "SS.mmm" / plain seconds into seconds.
+  private parseTimestampSeconds(value?: string | null): number | null {
+    const trimmed = value?.trim()
+    if (!trimmed) {
+      return null
+    }
+
+    const parts = trimmed.split(':').map((part) => part.trim())
+    if (parts.length > 3 || parts.some((part) => part === '' || Number.isNaN(Number(part)))) {
+      return null
+    }
+
+    const seconds = parts.reduce((acc, part) => acc * 60 + Number(part), 0)
+    return Number.isFinite(seconds) && seconds >= 0 ? seconds : null
   }
 
   private pushRequestArgs(
