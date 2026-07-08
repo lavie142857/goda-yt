@@ -335,6 +335,28 @@ export class YtDlpService {
       } catch (error) {
         let details = (error as Error).message
 
+        // A hardware (GPU) encoder failed the recode at runtime -> retry once
+        // forcing the CPU encoder so the download still completes.
+        if (this.usesGpuRecode(request, options.settings) && this.isGpuEncoderError(details)) {
+          try {
+            await runWithArgs(this.buildArgs(
+              request,
+              options.settings,
+              {
+                relaxed: false,
+                platform,
+                authAttempt,
+                tiktokProfile: this.getDefaultTikTokExtractorProfile(platform),
+                forceCpuRecode: true,
+              },
+              cookiesPath,
+            ))
+            return
+          } catch (cpuError) {
+            details = (cpuError as Error).message
+          }
+        }
+
         if (this.shouldRetryWithRelaxedSelector(details, platform)) {
           try {
             await runWithArgs(this.buildArgs(
@@ -497,6 +519,7 @@ export class YtDlpService {
       platform: DownloadPlatform | null
       authAttempt: DownloadAuthAttempt
       tiktokProfile?: TikTokExtractorProfile
+      forceCpuRecode?: boolean
     },
     cookiesPath: string | null,
   ): string[] {
@@ -562,7 +585,9 @@ export class YtDlpService {
     // platforms get fewer connections to avoid soft-blocks. Skipped while trimming.
     const aria2c = resolveAria2cPath()
     if (aria2c && !section) {
-      const connections = options.platform === 'youtube' ? 16 : 4
+      // Moderate parallelism: fast without looking abusive. Rate-limit-sensitive
+      // platforms (TikTok/FB/IG) get fewer connections to avoid soft-blocks.
+      const connections = options.platform === 'youtube' ? 8 : 4
       args.push('--downloader', aria2c)
       args.push('--downloader-args', `aria2c:-x${connections} -s${connections} -k1M`)
     }
@@ -572,9 +597,12 @@ export class YtDlpService {
       args.push('--embed-metadata', '--embed-thumbnail')
     }
 
+    // A GPU-encoder failure at runtime falls back to the CPU encoder on retry.
+    const recodeEncoder: RecodeEncoder = options.forceCpuRecode ? 'cpu' : settings.recodeEncoder
+
     pushJsRuntimeArgs(args)
     this.pushTikTokExtractorArgs(args, options.platform, options.tiktokProfile)
-    this.pushRequestArgs(args, request, settings.defaultFormat, settings.forceH264, settings.recodeEncoder, options)
+    this.pushRequestArgs(args, request, settings.defaultFormat, settings.forceH264, recodeEncoder, options)
 
     args.push(request.url)
 
@@ -590,6 +618,17 @@ export class YtDlpService {
     const start = trimStart?.trim()
     const end = trimEnd?.trim()
     if (!start && !end) {
+      return null
+    }
+
+    // Reject unparseable or illogical (start >= end) ranges rather than passing
+    // garbage to yt-dlp, which would fail the whole download with a cryptic error.
+    const startSec = start ? this.parseTimestampSeconds(start) : 0
+    const endSec = end ? this.parseTimestampSeconds(end) : null
+    if ((start && startSec === null) || (end && endSec === null)) {
+      return null
+    }
+    if (startSec !== null && endSec !== null && startSec >= endSec) {
       return null
     }
 
@@ -868,6 +907,19 @@ export class YtDlpService {
       && requestedFormat === 'mp4'
       && requestedHeight
       && requestedHeight > 1080,
+    )
+  }
+
+  // True when this download would re-encode using a hardware (GPU) encoder, i.e.
+  // a retry forcing the CPU encoder could rescue a GPU failure.
+  private usesGpuRecode(request: DownloadRequest, settings: AppSettings): boolean {
+    return settings.recodeEncoder !== 'cpu' && this.willRecodeVideo(request, settings)
+  }
+
+  // Recognise a hardware-encoder failure so we can retry on the CPU encoder.
+  private isGpuEncoderError(raw: string): boolean {
+    return /nvenc|h264_qsv|h264_amf|qsv|cuda|cuvid|impossible to convert|error initializing output stream|error while opening encoder|openencodesessionex|no capable devices|hardware/i.test(
+      raw,
     )
   }
 

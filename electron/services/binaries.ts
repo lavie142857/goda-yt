@@ -6,14 +6,18 @@ import path from 'node:path'
 // both the downloader and the probe so they can never drift out of sync.
 
 function resolveBinFile(file: string): string | null {
-  const cwdPath = path.join(process.cwd(), 'bin', file)
-  if (existsSync(cwdPath)) {
-    return cwdPath
-  }
-
+  // Prefer the bundled, trusted location (resources/bin) FIRST. Checking the
+  // current working directory first would let a binary planted in an attacker-
+  // controlled cwd (bin/yt-dlp.exe, aria2c.exe, ...) run instead. In dev there is
+  // no resources/bin, so it naturally falls through to the project's bin/.
   const resourcesPath = path.join(process.resourcesPath, 'bin', file)
   if (existsSync(resourcesPath)) {
     return resourcesPath
+  }
+
+  const cwdPath = path.join(process.cwd(), 'bin', file)
+  if (existsSync(cwdPath)) {
+    return cwdPath
   }
 
   return null

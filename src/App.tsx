@@ -1985,6 +1985,9 @@ function App() {
                     const endSec = parseTimeToSeconds(video.trimEnd) ?? dur
                     const clipLen = dur > 0 && endSec > startSec ? formatSecondsToTime(endSec - startSec) : null
                     const hasTrim = Boolean(video.trimStart.trim() || video.trimEnd.trim())
+                    const startBad = video.trimStart.trim() !== '' && parseTimeToSeconds(video.trimStart) === null
+                    const endBad = video.trimEnd.trim() !== '' && parseTimeToSeconds(video.trimEnd) === null
+                    const rangeBad = !startBad && !endBad && video.trimEnd.trim() !== '' && startSec >= endSec
                     return (
                       <div className="trim-editor">
                         {dur > 0 && (
@@ -2004,7 +2007,7 @@ function App() {
                           <span className="trim-icon" aria-hidden="true">✂</span>
                           <input
                             type="text"
-                            className="trim-input"
+                            className={`trim-input ${startBad || rangeBad ? 'trim-input-invalid' : ''}`}
                             placeholder={t.trimStartPlaceholder}
                             value={video.trimStart}
                             onChange={(e) => updateVideo(video.id, { trimStart: e.target.value })}
@@ -2013,7 +2016,7 @@ function App() {
                           <span className="trim-sep" aria-hidden="true">→</span>
                           <input
                             type="text"
-                            className="trim-input"
+                            className={`trim-input ${endBad || rangeBad ? 'trim-input-invalid' : ''}`}
                             placeholder={t.trimEndPlaceholder}
                             value={video.trimEnd}
                             onChange={(e) => updateVideo(video.id, { trimEnd: e.target.value })}

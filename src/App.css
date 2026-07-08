@@ -908,6 +908,11 @@ select option {
   color: var(--muted);
 }
 
+.trim-input-invalid {
+  border-color: var(--error);
+  background: var(--error-soft);
+}
+
 .trim-sep {
   color: var(--muted);
 }
