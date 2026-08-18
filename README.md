@@ -42,6 +42,15 @@ Double-click `launch-app.vbs` to open the app without a visible command window. 
 npm run build
 ```
 
+Before packaging, verify or restore the pinned Windows binaries:
+
+```powershell
+npm run ensure:binaries
+```
+
+The versions, official download URLs, and SHA-256 hashes are defined in
+`scripts/binaries.manifest.json`. All package scripts run this check automatically.
+
 Outputs:
 
 - Renderer: `dist/`

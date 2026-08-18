@@ -13,8 +13,16 @@
   ],
   "extraResources": [
     {
-      "from": "bin",
-      "to": "bin"
+      "from": "bin/yt-dlp.exe",
+      "to": "bin/yt-dlp.exe"
+    },
+    {
+      "from": "bin/ffmpeg.exe",
+      "to": "bin/ffmpeg.exe"
+    },
+    {
+      "from": "bin/node.exe",
+      "to": "bin/node.exe"
     }
   ],
   "publish": [

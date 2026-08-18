@@ -29,8 +29,14 @@ let mainWindow: InstanceType<typeof BrowserWindow> | null = null
 const settingsStore = new SettingsStore()
 const authStore = new AuthStore()
 const historyStore = new HistoryStore()
-const ytDlpService = new YtDlpService(() => authStore.materializeCookies())
-const videoInfoService = new VideoInfoService(() => authStore.materializeCookies())
+const ytDlpService = new YtDlpService(
+  () => authStore.materializeCookies(),
+  () => authStore.hasCookiesFile(),
+)
+const videoInfoService = new VideoInfoService(
+  () => authStore.materializeCookies(),
+  () => authStore.hasCookiesFile(),
+)
 const notifications: SystemNotification[] = []
 const taskStatusSnapshot = new Map<string, DownloadTask['status']>()
 
@@ -105,6 +111,13 @@ function pushNotification(
   }
 
   return entry
+}
+
+function publishOutputDirWarning(): void {
+  const warning = settingsStore.takeOutputDirWarning()
+  if (warning) {
+    pushNotification({ level: 'warning', source: 'system', message: warning })
+  }
 }
 
 function detectTaskTransitions(tasks: DownloadTask[]): void {
@@ -404,6 +417,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('settings:update', async (_event, payload) => {
     const updated = settingsStore.update(payload)
+    publishOutputDirWarning()
     mainWindow?.webContents.send('settings:changed', updated)
     return updated
   })
@@ -474,9 +488,11 @@ function registerIpcHandlers(): void {
       return null
     }
 
-    return settingsStore.update({
+    const updated = settingsStore.update({
       outputDir: picked.filePaths[0],
     })
+    publishOutputDirWarning()
+    return updated
   })
 
   ipcMain.handle('yt-dlp:probe', async () => ytDlpService.probe())
@@ -598,6 +614,12 @@ function registerIpcHandlers(): void {
         level: 'success',
         source: 'system',
         message: 'Đã nhập cookies đăng nhập.',
+      })
+    } else {
+      pushNotification({
+        level: 'warning',
+        source: 'system',
+        message: 'File cookies không có phiên đăng nhập còn hạn cho nền tảng được hỗ trợ.',
       })
     }
     return authStore.hasCookiesFile()
@@ -725,6 +747,7 @@ if (isSecondInstance) {
     }
     registerIpcHandlers()
     createWindow()
+    publishOutputDirWarning()
     void runScheduledAutoUpdate()
     setupAppAutoUpdate()
 

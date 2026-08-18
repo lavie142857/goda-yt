@@ -443,7 +443,7 @@ function formatTrimTag(trimStart?: string | null, trimEnd?: string | null): stri
     return null
   }
 
-  const safe = (value: string): string => value.replace(/:/g, '-').replace(/[^\d.\-]/g, '')
+  const safe = (value: string): string => value.replace(/:/g, '-').replace(/[^\d.-]/g, '')
   return `cut ${start ? safe(start) : '0'}~${end ? safe(end) : 'end'}`
 }
 
@@ -682,7 +682,9 @@ function TrimSlider(props: {
 const QueueRow = memo(function QueueRow(props: QueueRowProps) {
   const { id, status, stage, percent, speed, eta, error, outputFile, reused, title, thumbnail, platform, isDragging, canMoveUp, canMoveDown, showLoginHint, t } = props
   const terminal = isTerminalStatus(status)
-  const showIndeterminateProgress = status === 'active' && stage === 'dang-chuyen-ma' && percent <= 0
+  const showIndeterminateProgress = status === 'active'
+    && (stage === 'dang-ket-noi'
+      || (percent <= 0 && (stage === 'dang-tai' || stage === 'dang-chuyen-ma')))
 
   return (
     <article
@@ -711,8 +713,11 @@ const QueueRow = memo(function QueueRow(props: QueueRowProps) {
           <span className={`platform-tag ${platformColorClass(platform)}`}>{platformLabel(platform, t)}</span>
           <span>{formatStatusLabel(status, t, stage)}</span>
           {reused && <span className="reused-tag" title={t.reusedHint}>♻ {t.reusedBadge}</span>}
-          {status === 'active' && <span className="speed-tag">{speed}</span>}
-          {status === 'active' && <span>ETA {eta}</span>}
+          {status === 'active' && !showIndeterminateProgress && (
+            <span className="speed-tag">{Math.round(Math.max(0, Math.min(100, percent)))}%</span>
+          )}
+          {status === 'active' && speed !== '-' && <span className="speed-tag">{speed}</span>}
+          {status === 'active' && eta !== '--:--' && <span>ETA {eta}</span>}
           {error && <span className="row-error">{formatQueueError(error, t)}</span>}
           {error && showLoginHint && (
             <button className="login-hint-button" type="button" onClick={props.onLoginHint}>

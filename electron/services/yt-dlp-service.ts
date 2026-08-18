@@ -1,16 +1,15 @@
 import path from 'node:path'
-import { randomBytes } from 'node:crypto'
 import { readdirSync, statSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import {
   pushJsRuntimeArgs,
-  resolveAria2cPath,
   resolveFfmpegLocation,
   resolveNodeRuntimeSpec,
   resolveYtDlpPath,
 } from './binaries.js'
 import { detectPlatform } from './platform.js'
-import { resolveH264RecodeArgs } from './gpu.js'
+import { CPU_H264_RECODE_ARGS, resolveH264RecodePlan } from './gpu.js'
+import { getSessionTikTokDeviceId } from './tiktok-device.js'
 import type { CookiesHandle } from './auth-store.js'
 import type {
   AppSettings,
@@ -18,7 +17,6 @@ import type {
   DownloadRequest,
   OutputFormat,
   QualityOption,
-  RecodeEncoder,
   YtDlpProbe,
   YtDlpUpdateResult,
 } from '../types.js'
@@ -40,6 +38,8 @@ type DownloadAuthAttempt = 'public' | 'cookies'
 
 type TikTokExtractorProfile = 'web' | 'app-api'
 
+type YouTubeExtractorProfile = 'default' | 'web-embedded'
+
 export class YtDlpDownloadError extends Error {
   constructor(
     message: string,
@@ -51,7 +51,10 @@ export class YtDlpDownloadError extends Error {
 }
 
 export class YtDlpService {
-  constructor(private readonly getCookies: () => CookiesHandle | null = () => null) {}
+  constructor(
+    private readonly getCookies: () => CookiesHandle | null = () => null,
+    private readonly hasCookies: () => boolean = () => false,
+  ) {}
 
   async probe(): Promise<YtDlpProbe> {
     const executable = resolveYtDlpPath()
@@ -158,11 +161,21 @@ export class YtDlpService {
     const platform = detectPlatform(request.url)
     const outputDir = request.outputDir?.trim() || options.settings.outputDir
     const expectsRecode = this.willRecodeVideo(request, options.settings)
+    const recodePlan = expectsRecode
+      ? await resolveH264RecodePlan(options.settings.recodeEncoder)
+      : null
+    if (options.signal.aborted) {
+      throw new Error('DOWNLOAD_ABORTED')
+    }
     // Trimming re-encodes (keyframe-accurate cut) and yt-dlp emits ffmpeg frame=/
     // time= progress instead of "[download] %", so reuse the recode progress path
     // and measure against the clip length rather than the full video.
     const trimSection = this.buildDownloadSection(request.trimStart, request.trimEnd)
     const clipDurationSeconds = trimSection ? this.computeClipDurationSeconds(request) : null
+    const downloadComponentIds: string[] = []
+    const mapsSeparateStreams = platform === 'youtube'
+      && request.preset !== 'audioMp3'
+      && request.preset !== 'audioM4a'
     const runWithArgs = async (args: string[]): Promise<void> => {
       await new Promise<void>((resolve, reject) => {
         const child = spawn(executable, args, {
@@ -184,6 +197,46 @@ export class YtDlpService {
         const handleLine = (lineRaw: string) => {
           const line = lineRaw.trim()
           if (!line) {
+            return
+          }
+
+          if (line.startsWith('FLASH_PROGRESS|')) {
+            const [, rawFormatId = '', rawPercent = '', rawSpeed = '', rawEta = ''] = line.split('|')
+            const rawPercentNumber = Number(rawPercent.replace(/[^\d.]/g, ''))
+            const speed = rawSpeed.trim()
+            const eta = rawEta.trim()
+            let percent = Number.isFinite(rawPercentNumber) ? rawPercentNumber : undefined
+
+            if (percent !== undefined && mapsSeparateStreams) {
+              const formatId = rawFormatId.trim()
+              let componentIndex = downloadComponentIds.indexOf(formatId)
+              if (componentIndex < 0) {
+                downloadComponentIds.push(formatId)
+                componentIndex = downloadComponentIds.length - 1
+              }
+
+              // Most YouTube quality downloads fetch video and audio separately.
+              // Reserve the final 1% for merging so the displayed total never
+              // reaches 100% and then falls back to 0% for the audio stream.
+              percent = componentIndex === 0
+                ? percent * 0.9
+                : componentIndex === 1
+                  ? 90 + percent * 0.09
+                  : 99 + percent * 0.009
+            }
+
+            options.onProgress({
+              percent,
+              speed: speed && !/^(?:NA|Unknown(?: B\/s)?)$/i.test(speed) ? speed : undefined,
+              eta: eta && !/^(?:NA|Unknown)$/i.test(eta) ? eta : undefined,
+              stage: 'dang-tai',
+            })
+            return
+          }
+
+          if (line.startsWith('FLASH_OUTPUT|')) {
+            const outputFile = this.resolveOutputFilePath(line.slice('FLASH_OUTPUT|'.length), outputDir)
+            options.onOutputFile(outputFile)
             return
           }
 
@@ -323,21 +376,79 @@ export class YtDlpService {
       // public YouTube videos.
       const cookies = authAttempt === 'cookies' ? this.getCookies() : null
       const cookiesPath = cookies?.path ?? null
+      const initialYouTubeProfile: YouTubeExtractorProfile =
+        platform === 'youtube' && authAttempt === 'public' ? 'web-embedded' : 'default'
 
       try {
         const baseProfile = this.getDefaultTikTokExtractorProfile(platform)
         await runWithArgs(this.buildArgs(
           request,
           options.settings,
-          { relaxed: false, platform, authAttempt, tiktokProfile: baseProfile },
+          {
+            relaxed: false,
+            platform,
+            authAttempt,
+            tiktokProfile: baseProfile,
+            // Public YouTube downloads use embedded first because the normal web
+            // client is commonly challenged before transfer starts. Authenticated
+            // attempts keep the normal client so login-only formats still work.
+            youtubeProfile: initialYouTubeProfile,
+            recodeArgs: recodePlan?.args,
+          },
           cookiesPath,
         ))
       } catch (error) {
         let details = (error as Error).message
 
+        // Keep the alternate YouTube client as a compatibility fallback. Public
+        // attempts normally start embedded; cookie attempts start with regular web.
+        const shouldTryAlternateYouTubeClient =
+          initialYouTubeProfile === 'web-embedded'
+            ? platform === 'youtube' && details !== 'DOWNLOAD_ABORTED'
+            : this.shouldRetryWithYouTubeEmbedded(details, platform)
+
+        if (shouldTryAlternateYouTubeClient) {
+          const fallbackProfiles: YouTubeExtractorProfile[] = initialYouTubeProfile === 'default'
+            ? ['web-embedded', 'web-embedded']
+            : ['default']
+          for (let attempt = 0; attempt < fallbackProfiles.length; attempt++) {
+            if (attempt > 0) {
+              await this.sleep(800 + Math.floor(Math.random() * 500))
+            }
+
+            options.onProgress({
+              speed: '-',
+              eta: '--:--',
+              stage: 'dang-ket-noi',
+            })
+
+            try {
+              await runWithArgs(this.buildArgs(
+                request,
+                options.settings,
+                {
+                  relaxed: false,
+                  platform,
+                  authAttempt,
+                  tiktokProfile: this.getDefaultTikTokExtractorProfile(platform),
+                  youtubeProfile: fallbackProfiles[attempt],
+                  recodeArgs: recodePlan?.args,
+                },
+                cookiesPath,
+              ))
+              return
+            } catch (embeddedError) {
+              details = (embeddedError as Error).message
+              if (!this.shouldRetryWithYouTubeEmbedded(details, platform)) {
+                break
+              }
+            }
+          }
+        }
+
         // A hardware (GPU) encoder failed the recode at runtime -> retry once
         // forcing the CPU encoder so the download still completes.
-        if (this.usesGpuRecode(request, options.settings) && this.isGpuEncoderError(details)) {
+        if (recodePlan?.hardware && this.isGpuEncoderError(details)) {
           try {
             await runWithArgs(this.buildArgs(
               request,
@@ -347,7 +458,7 @@ export class YtDlpService {
                 platform,
                 authAttempt,
                 tiktokProfile: this.getDefaultTikTokExtractorProfile(platform),
-                forceCpuRecode: true,
+                recodeArgs: CPU_H264_RECODE_ARGS,
               },
               cookiesPath,
             ))
@@ -377,14 +488,15 @@ export class YtDlpService {
         }
 
         if (this.shouldRetryWithTikTokAppApi(details, platform)) {
-          const rescueAttempts = 3
-          for (let rescueAttempt = 1; rescueAttempt <= rescueAttempts; rescueAttempt++) {
+          const rescueProfiles: TikTokExtractorProfile[] = ['web', 'app-api', 'app-api']
+          for (let rescueAttempt = 1; rescueAttempt <= rescueProfiles.length; rescueAttempt++) {
             await this.sleep(450 * rescueAttempt + Math.floor(Math.random() * 300))
+            const rescueProfile = rescueProfiles[rescueAttempt - 1]
             try {
               await runWithArgs(this.buildArgs(
                 request,
                 options.settings,
-                { relaxed: false, platform, authAttempt, tiktokProfile: 'app-api' },
+                { relaxed: false, platform, authAttempt, tiktokProfile: rescueProfile },
                 cookiesPath,
               ))
               return
@@ -396,7 +508,7 @@ export class YtDlpService {
                   await runWithArgs(this.buildArgs(
                     request,
                     options.settings,
-                    { relaxed: true, platform, authAttempt, tiktokProfile: 'app-api' },
+                    { relaxed: true, platform, authAttempt, tiktokProfile: rescueProfile },
                     cookiesPath,
                   ))
                   return
@@ -418,7 +530,12 @@ export class YtDlpService {
       }
     }
 
-    const authAttempts = this.buildDownloadAuthAttempts(options.settings.authMode ?? 'public')
+    const cookieSourceAvailable = this.hasCookies()
+      || (options.settings.cookiesBrowser !== 'none')
+    const authAttempts = this.buildDownloadAuthAttempts(
+      options.settings.authMode ?? 'public',
+      cookieSourceAvailable,
+    )
     let lastError: Error | null = null
 
     for (let index = 0; index < authAttempts.length; index++) {
@@ -519,21 +636,29 @@ export class YtDlpService {
       platform: DownloadPlatform | null
       authAttempt: DownloadAuthAttempt
       tiktokProfile?: TikTokExtractorProfile
-      forceCpuRecode?: boolean
+      youtubeProfile?: YouTubeExtractorProfile
+      recodeArgs?: string | null
     },
     cookiesPath: string | null,
   ): string[] {
     const outputDir = request.outputDir?.trim() || settings.outputDir
     const outputTemplate = this.buildOutputTemplate(request.title)
 
-    // YouTube serves large fragmented DASH streams (parallelize aggressively).
-    // Instagram/Facebook are rate-limit sensitive, so keep fewer parallel
-    // fragments to avoid 429 blocks; TikTok is usually a single file anyway.
-    const fragmentConcurrency = options.platform === 'youtube' ? '8' : '4'
+    // Four concurrent fragments keeps good throughput without making unstable
+    // connections or YouTube CDNs more likely to reject ranged requests.
+    const fragmentConcurrency = '4'
 
     const args = [
       '--newline',
+      '--no-colors',
+      // --print after_move enables quiet mode in yt-dlp; force progress back on so
+      // the UI still receives FLASH_PROGRESS events during the transfer.
+      '--progress',
       '--no-playlist',
+      '--progress-template',
+      'download:FLASH_PROGRESS|%(info.format_id)s|%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s',
+      '--print',
+      'after_move:FLASH_OUTPUT|%(filepath)s',
       '--retries',
       String(settings.maxRetries),
       '--fragment-retries',
@@ -551,12 +676,22 @@ export class YtDlpService {
       '--force-ipv4',
       '--socket-timeout',
       '30',
+      '--retry-sleep',
+      'http:exp=1:8',
+      '--retry-sleep',
+      'fragment:exp=1:8',
+      '--retry-sleep',
+      'extractor:exp=1:8',
       '--paths',
       outputDir,
       '--output',
       outputTemplate,
       '--windows-filenames',
     ]
+
+    if (options.platform === 'youtube' || options.platform === 'tiktok') {
+      args.push('--sleep-requests', '0.5')
+    }
 
     const ffmpegLocation = resolveFfmpegLocation()
     if (ffmpegLocation) {
@@ -573,23 +708,11 @@ export class YtDlpService {
       args.push('--cookies-from-browser', settings.cookiesBrowser)
     }
 
-    // Clip range (trim): download only the requested section. Uses keyframe-accurate
-    // cuts. Note: aria2c can't do partial downloads, so trimming disables it below.
+    // Clip range (trim): download only the requested section with keyframe-accurate cuts.
     const section = this.buildDownloadSection(request.trimStart, request.trimEnd)
     if (section) {
       args.push('--download-sections', section)
       args.push('--force-keyframes-at-cuts')
-    }
-
-    // Faster multi-connection downloads via aria2c when bundled. Rate-limit-sensitive
-    // platforms get fewer connections to avoid soft-blocks. Skipped while trimming.
-    const aria2c = resolveAria2cPath()
-    if (aria2c && !section) {
-      // Moderate parallelism: fast without looking abusive. Rate-limit-sensitive
-      // platforms (TikTok/FB/IG) get fewer connections to avoid soft-blocks.
-      const connections = options.platform === 'youtube' ? 8 : 4
-      args.push('--downloader', aria2c)
-      args.push('--downloader-args', `aria2c:-x${connections} -s${connections} -k1M`)
     }
 
     // Write title/uploader/etc. into the file, and embed the thumbnail as cover
@@ -602,12 +725,10 @@ export class YtDlpService {
       }
     }
 
-    // A GPU-encoder failure at runtime falls back to the CPU encoder on retry.
-    const recodeEncoder: RecodeEncoder = options.forceCpuRecode ? 'cpu' : settings.recodeEncoder
-
     pushJsRuntimeArgs(args)
+    this.pushYouTubeExtractorArgs(args, options.platform, options.youtubeProfile)
     this.pushTikTokExtractorArgs(args, options.platform, options.tiktokProfile)
-    this.pushRequestArgs(args, request, settings.defaultFormat, settings.forceH264, recodeEncoder, options)
+    this.pushRequestArgs(args, request, settings.defaultFormat, settings.forceH264, options.recodeArgs, options)
 
     args.push(request.url)
 
@@ -687,7 +808,7 @@ export class YtDlpService {
     request: DownloadRequest,
     defaultFormat: OutputFormat,
     forceH264: boolean,
-    recodeEncoder: RecodeEncoder,
+    recodeArgs: string | null | undefined,
     options: { relaxed: boolean; platform: DownloadPlatform | null },
   ): void {
     const requestedFormat = request.format ?? defaultFormat
@@ -725,7 +846,7 @@ export class YtDlpService {
             args.push('--recode-video', 'mp4')
             args.push(
               '--postprocessor-args',
-              `VideoConvertor:${resolveH264RecodeArgs(recodeEncoder)} -stats -stats_period 0.5 -progress pipe:2`,
+              `VideoConvertor:${recodeArgs || CPU_H264_RECODE_ARGS} -stats -stats_period 0.5 -progress pipe:2`,
             )
           } else {
             args.push('--merge-output-format', 'mp4')
@@ -749,6 +870,20 @@ export class YtDlpService {
     if (request.preset === 'audioM4a') {
       args.push('-f', 'bestaudio[ext=m4a]/bestaudio/best')
       args.push('-x', '--audio-format', 'm4a')
+      return
+    }
+
+    if (
+      requestedFormat === 'webm'
+      && options.platform
+      && options.platform !== 'youtube'
+    ) {
+      // TikTok/Facebook/Instagram normally expose MP4/H.264 only. Asking yt-dlp
+      // for a native WebM format fails before post-processing, so fetch the best
+      // available stream and perform the requested container/codec conversion.
+      const heightFilter = selectorMaxHeight ? `[height<=${selectorMaxHeight}]` : ''
+      args.push('-f', `b${heightFilter}/bv*${heightFilter}+ba/best`)
+      args.push('--recode-video', 'webm')
       return
     }
 
@@ -786,7 +921,7 @@ export class YtDlpService {
     // first while preserving its normal webpage fallback for web-only posts.
     args.push(
       '--extractor-args',
-      `tiktok:api_hostname=api22-normal-c-useast2a.tiktokv.com;device_id=${this.buildTikTokDeviceId()};app_info=`,
+      `tiktok:device_id=${getSessionTikTokDeviceId()};app_info=`,
     )
   }
 
@@ -926,12 +1061,6 @@ export class YtDlpService {
     )
   }
 
-  // True when this download would re-encode using a hardware (GPU) encoder, i.e.
-  // a retry forcing the CPU encoder could rescue a GPU failure.
-  private usesGpuRecode(request: DownloadRequest, settings: AppSettings): boolean {
-    return settings.recodeEncoder !== 'cpu' && this.willRecodeVideo(request, settings)
-  }
-
   // Recognise a hardware-encoder failure so we can retry on the CPU encoder.
   private isGpuEncoderError(raw: string): boolean {
     return /nvenc|h264_qsv|h264_amf|qsv|cuda|cuvid|impossible to convert|error initializing output stream|error while opening encoder|openencodesessionex|no capable devices|hardware/i.test(
@@ -1046,7 +1175,14 @@ export class YtDlpService {
     return `${minutes}:${String(secs).padStart(2, '0')}`
   }
 
-  private buildDownloadAuthAttempts(authMode: AppSettings['authMode']): DownloadAuthAttempt[] {
+  private buildDownloadAuthAttempts(
+    authMode: AppSettings['authMode'],
+    cookieSourceAvailable: boolean,
+  ): DownloadAuthAttempt[] {
+    if (!cookieSourceAvailable) {
+      return ['public']
+    }
+
     if (authMode === 'cookies') {
       return ['cookies', 'public']
     }
@@ -1075,7 +1211,7 @@ export class YtDlpService {
   }
 
   private canCookiesHelp(raw: string): boolean {
-    return /sign in|authentication required|login required|age[-_\s]?restricted|confirm your age|private video|members[- ]only|join this channel|cookies|required|empty media response|account is private|not returning public media/i.test(
+    return /sign in|authentication required|login required|age[-_\s]?restricted|confirm your age|private video|members[- ]only|join this channel|cookies|required|empty media response|account is private|not returning public media|unexpected response from webpage request|challenge|captcha|http error 403|forbidden/i.test(
       raw,
     )
   }
@@ -1180,18 +1316,27 @@ export class YtDlpService {
       return false
     }
 
-    return /unable to extract universal data|unable to extract webpage video data|unable to extract aweme|failed to parse json|no video formats found|video not available, status code 0|http error (?:403|429)|too many requests|timed? ?out|connection|network|incomplete data/i.test(
+    return /unable to extract universal data|unable to extract webpage video data|unable to extract aweme|failed to parse json|no video formats found|video not available, status code 0|unexpected response from webpage request|solve challenge|challenge|captcha|http error (?:403|429)|too many requests|timed? ?out|connection|network|incomplete data/i.test(
       raw,
     )
   }
 
-  private buildTikTokDeviceId(): string {
-    const min = 7250000000000000000n
-    const max = 7325099899999994577n
-    const span = max - min + 1n
-    const random = BigInt(`0x${randomBytes(8).toString('hex')}`)
+  private shouldRetryWithYouTubeEmbedded(raw: string, platform: DownloadPlatform | null): boolean {
+    if (platform !== 'youtube' || raw === 'DOWNLOAD_ABORTED') {
+      return false
+    }
 
-    return (min + (random % span)).toString()
+    return /http error (?:403|429)|forbidden|too many requests|sign in to confirm.*not a bot|confirm you.?re not a bot|missing required visitor data|unable to fetch gvs po token/i.test(raw)
+  }
+
+  private pushYouTubeExtractorArgs(
+    args: string[],
+    platform: DownloadPlatform | null,
+    profile: YouTubeExtractorProfile | undefined,
+  ): void {
+    if (platform === 'youtube' && profile === 'web-embedded') {
+      args.push('--extractor-args', 'youtube:player_client=web_embedded')
+    }
   }
 
   private sleep(ms: number): Promise<void> {

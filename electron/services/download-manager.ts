@@ -16,6 +16,8 @@ export class DownloadManager {
 
   private readonly pausedTaskIds = new Set<string>()
 
+  private readonly retryNotBefore = new Map<string, number>()
+
   private paused = false
 
   private emitTimer: ReturnType<typeof setTimeout> | null = null
@@ -284,6 +286,7 @@ export class DownloadManager {
     }
 
     if (task.status === 'pending') {
+      this.retryNotBefore.delete(id)
       task.status = 'cancelled'
       task.updatedAt = Date.now()
       task.progress.stage = 'da-huy'
@@ -311,6 +314,7 @@ export class DownloadManager {
     }
 
     task.status = 'pending'
+    this.retryNotBefore.delete(id)
     task.retryCount = 0
     task.error = undefined
     task.outputFile = undefined
@@ -334,6 +338,7 @@ export class DownloadManager {
     for (const [id, task] of this.tasks) {
       if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
         this.tasks.delete(id)
+        this.retryNotBefore.delete(id)
         removed = true
       }
     }
@@ -353,7 +358,10 @@ export class DownloadManager {
     const settings = this.settingsStore.get()
 
     while (this.activeControllers.size < settings.maxConcurrent) {
-      const nextTask = this.getQueue().find((task) => task.status === 'pending')
+      const now = Date.now()
+      const nextTask = this.getQueue().find(
+        (task) => task.status === 'pending' && (this.retryNotBefore.get(task.id) ?? 0) <= now,
+      )
 
       if (!nextTask) {
         return
@@ -366,15 +374,16 @@ export class DownloadManager {
   }
 
   private async runTask(task: DownloadTask): Promise<void> {
-    let shouldScheduleAfterFinish = true
-
     // Mark active synchronously so the scheduler won't re-pick this task while
     // the (async) reuse check runs. Clear any error from a previous attempt so a
     // task that later completes (e.g. succeeds on retry) doesn't keep showing it.
     task.status = 'active'
+    this.retryNotBefore.delete(task.id)
     task.error = undefined
     task.updatedAt = Date.now()
     task.progress.stage = 'dang-ket-noi'
+    task.progress.speed = '-'
+    task.progress.eta = '--:--'
 
     // Reserve the concurrency slot synchronously (before any await) so the
     // scheduler's maxConcurrent check stays correct while the async reuse check runs.
@@ -398,13 +407,23 @@ export class DownloadManager {
           eta?: string
           stage?: string
         }) => {
+          const nextStage = patch.stage ?? task.progress.stage
+          const startsRecode = nextStage === 'dang-chuyen-ma'
+            && task.progress.stage !== 'dang-chuyen-ma'
+          const requestedPercent = patch.percent ?? task.progress.percent
+          // Download retries/fallbacks may restart their raw counter. Keep the UI
+          // monotonic except when recode intentionally starts its own real 0-100%.
+          const nextPercent = startsRecode
+            ? requestedPercent
+            : Math.max(task.progress.percent, requestedPercent)
+
           task.progress = {
             ...task.progress,
             ...patch,
-            percent: patch.percent ?? task.progress.percent,
+            percent: nextPercent,
             speed: patch.speed ?? task.progress.speed,
             eta: patch.eta ?? task.progress.eta,
-            stage: patch.stage ?? task.progress.stage,
+            stage: nextStage,
           }
           task.updatedAt = Date.now()
           this.emitQueue()
@@ -450,10 +469,15 @@ export class DownloadManager {
           task.updatedAt = Date.now()
 
           const backoffMs = Math.min(30000, 4000 * 2 ** (task.retryCount - 1))
+          const retryAt = Date.now() + backoffMs
+          this.retryNotBefore.set(task.id, retryAt)
           this.emitQueue()
-          this.activeControllers.delete(task.id)
-          shouldScheduleAfterFinish = false
-          setTimeout(() => this.schedule(), backoffMs)
+          setTimeout(() => {
+            if (this.retryNotBefore.get(task.id) === retryAt) {
+              this.retryNotBefore.delete(task.id)
+              this.schedule()
+            }
+          }, backoffMs)
           return
         }
 
@@ -472,9 +496,7 @@ export class DownloadManager {
     } finally {
       this.activeControllers.delete(task.id)
       this.emitQueueImmediate()
-      if (shouldScheduleAfterFinish) {
-        this.schedule()
-      }
+      this.schedule()
     }
   }
 
@@ -521,6 +543,7 @@ export class DownloadManager {
     const toRemove = terminalTasks.length - DownloadManager.MAX_TERMINAL_TASKS
     for (let i = 0; i < toRemove; i++) {
       this.tasks.delete(terminalTasks[i].id)
+      this.retryNotBefore.delete(terminalTasks[i].id)
     }
   }
 

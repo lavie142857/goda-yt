@@ -5,6 +5,13 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { loginAndCaptureCookies, type LoginResult } from './browser-login.js'
 
+const AUTH_COOKIE_NAMES = new Set([
+  'SID', 'SSID', 'HSID', 'SAPISID', 'APISID', '__Secure-1PSID', '__Secure-3PSID', 'LOGIN_INFO',
+  'sessionid', 'sid_tt', 'sessionid_ss', 'c_user', 'xs', 'ds_user_id',
+])
+
+const AUTH_DOMAINS = ['google.com', 'youtube.com', 'tiktok.com', 'facebook.com', 'instagram.com']
+
 // A decrypted cookies file materialized for a single yt-dlp run. The caller must
 // call cleanup() once the process has exited so the plaintext never lingers.
 export interface CookiesHandle {
@@ -96,7 +103,8 @@ export class AuthStore {
 
   hasCookiesFile(): boolean {
     this.ensureMigrated()
-    return (this.encryptionAvailable() && existsSync(this.encPath)) || existsSync(this.legacyPath)
+    const text = this.readCookiesText()
+    return Boolean(text && this.hasUsableAuthCookies(text))
   }
 
   // Decrypt cookies into a unique temp file for one yt-dlp run. Returns null when
@@ -104,7 +112,7 @@ export class AuthStore {
   materializeCookies(): CookiesHandle | null {
     this.ensureMigrated()
     const text = this.readCookiesText()
-    if (!text) {
+    if (!text || !this.hasUsableAuthCookies(text)) {
       return null
     }
 
@@ -131,7 +139,11 @@ export class AuthStore {
   // re-encrypting it at rest.
   importCookiesFile(sourcePath: string): boolean {
     try {
-      this.saveCookiesText(readFileSync(sourcePath, 'utf8'))
+      const text = readFileSync(sourcePath, 'utf8')
+      if (!this.hasUsableAuthCookies(text)) {
+        return false
+      }
+      this.saveCookiesText(text)
       return true
     } catch {
       return false
@@ -153,5 +165,32 @@ export class AuthStore {
         }
       }
     }
+  }
+
+  private hasUsableAuthCookies(text: string): boolean {
+    const nowSeconds = Math.floor(Date.now() / 1000)
+
+    return text.split(/\r?\n/).some((rawLine) => {
+      const line = rawLine.startsWith('#HttpOnly_') ? rawLine.slice('#HttpOnly_'.length) : rawLine
+      if (!line || line.startsWith('#')) {
+        return false
+      }
+
+      const fields = line.split('\t')
+      if (fields.length < 7) {
+        return false
+      }
+
+      const domain = fields[0].replace(/^\./, '').toLowerCase()
+      const expires = Number(fields[4])
+      const name = fields[5]
+      const value = fields.slice(6).join('\t')
+      const supportedDomain = AUTH_DOMAINS.some(
+        (candidate) => domain === candidate || domain.endsWith(`.${candidate}`),
+      )
+      const unexpired = expires === 0 || (Number.isFinite(expires) && expires > nowSeconds)
+
+      return supportedDomain && AUTH_COOKIE_NAMES.has(name) && Boolean(value) && unexpired
+    })
   }
 }

@@ -1,6 +1,6 @@
 import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { accessSync, constants, mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { readJsonWithBackup, writeJsonAtomically } from './json-store.js'
 import type { AppLanguage, AppSettings, AuthMode, CookiesBrowser, OutputFormat, RecodeEncoder, YtDlpAutoUpdateMode } from '../types.js'
@@ -12,11 +12,17 @@ export class SettingsStore {
 
   private settings: AppSettings
 
+  private outputDirWarning: string | null = null
+
   constructor() {
     const userDataPath = app.getPath('userData')
     this.settingsPath = path.join(userDataPath, SETTINGS_FILE)
     this.settings = this.load()
-    this.ensureOutputDir(this.settings.outputDir)
+    const configuredOutputDir = this.settings.outputDir
+    this.settings.outputDir = this.resolveUsableOutputDir(configuredOutputDir)
+    if (this.settings.outputDir !== configuredOutputDir) {
+      this.persist()
+    }
     this.ensureInstallId()
   }
 
@@ -31,13 +37,20 @@ export class SettingsStore {
     return { ...this.settings }
   }
 
+  takeOutputDirWarning(): string | null {
+    const warning = this.outputDirWarning
+    this.outputDirWarning = null
+    return warning
+  }
+
   update(payload: Partial<AppSettings>): AppSettings {
+    const requestedOutputDir = payload.outputDir?.trim() || this.settings.outputDir
     const next: AppSettings = {
       ...this.settings,
       ...payload,
       maxConcurrent: clampNumber(payload.maxConcurrent, 1, 5, this.settings.maxConcurrent),
       maxRetries: clampNumber(payload.maxRetries, 0, 5, this.settings.maxRetries),
-      outputDir: payload.outputDir?.trim() || this.settings.outputDir,
+      outputDir: this.resolveUsableOutputDir(requestedOutputDir, this.settings.outputDir),
       defaultFormat: normalizeOutputFormat(payload.defaultFormat, this.settings.defaultFormat),
       showSettingsPanel: normalizeBoolean(payload.showSettingsPanel, this.settings.showSettingsPanel),
       autoUpdateYtDlp: normalizeBoolean(payload.autoUpdateYtDlp, this.settings.autoUpdateYtDlp),
@@ -60,7 +73,6 @@ export class SettingsStore {
       embedMetadata: normalizeBoolean(payload.embedMetadata, this.settings.embedMetadata),
     }
 
-    this.ensureOutputDir(next.outputDir)
     this.settings = next
     this.persist()
     return this.get()
@@ -110,8 +122,33 @@ export class SettingsStore {
     writeJsonAtomically(this.settingsPath, this.settings, true)
   }
 
-  private ensureOutputDir(outputDir: string): void {
-    mkdirSync(outputDir, { recursive: true })
+  private resolveUsableOutputDir(preferred: string, current?: string): string {
+    const defaultOutputDir = path.join(app.getPath('videos'), 'FLASH MEDIA')
+    const emergencyOutputDir = path.join(app.getPath('userData'), 'downloads')
+    const candidates = [preferred, current, defaultOutputDir, emergencyOutputDir]
+      .filter((candidate): candidate is string => Boolean(candidate))
+    const uniqueCandidates = [...new Set(candidates)]
+
+    for (const candidate of uniqueCandidates) {
+      if (this.ensureWritableOutputDir(candidate)) {
+        if (candidate !== preferred) {
+          this.outputDirWarning = `Không thể ghi vào thư mục tải “${preferred}”. Đã chuyển sang “${candidate}”.`
+        }
+        return candidate
+      }
+    }
+
+    throw new Error('Không tìm được thư mục có quyền ghi để lưu video.')
+  }
+
+  private ensureWritableOutputDir(outputDir: string): boolean {
+    try {
+      mkdirSync(outputDir, { recursive: true })
+      accessSync(outputDir, constants.W_OK)
+      return true
+    } catch {
+      return false
+    }
   }
 }
 

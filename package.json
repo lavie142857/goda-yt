@@ -1,7 +1,7 @@
 {
   "name": "goda-yt",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "FLASH MEDIA desktop downloader for YouTube, TikTok, Facebook, and Instagram.",
   "author": "FLASH MEDIA",
   "type": "module",
@@ -14,13 +14,16 @@
     "build": "npm run ensure:electron:cjs && tsc -b && vite build",
     "build:electron": "npm run ensure:electron:cjs && tsc -p tsconfig.electron.json",
     "build:renderer": "vite build",
+    "ensure:binaries": "node ./scripts/ensure-binaries.mjs",
+    "diagnostics:auth": "electron ./scripts/dev-probes/auth-health.cjs",
+    "diagnostics:settings-fallback": "electron ./scripts/dev-probes/settings-fallback.cjs",
     "ensure:electron:cjs": "node ./scripts/ensure-electron-cjs.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "start": "npm run ensure:electron:cjs && cross-env NODE_ENV=production node ./scripts/run-electron.cjs",
-    "package": "npm run build && npx electron-builder --publish never",
-    "package:win": "npm run build && npx electron-builder --win --publish never",
-    "package:portable": "npm run build && npx electron-builder --win portable --publish never"
+    "package": "npm run ensure:binaries && npm run build && npx electron-builder --publish never",
+    "package:win": "npm run ensure:binaries && npm run build && npx electron-builder --win --publish never",
+    "package:portable": "npm run ensure:binaries && npm run build && npx electron-builder --win portable --publish never"
   },
   "dependencies": {
     "electron-updater": "^6.8.3",

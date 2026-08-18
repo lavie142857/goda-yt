@@ -9,16 +9,13 @@ interface TelegramConfig {
   chatId: string
 }
 
-const DEFAULT_TELEGRAM_BOT_TOKEN = '7425581998:AAGp4tS6_uwYfpBE59qdY2_uI_4ND_zNJmo'
-const DEFAULT_TELEGRAM_CHAT_ID = '730011734'
-
-// Env vars override the bundled default so release builds can swap Telegram
-// targets without editing source:
+// Desktop binaries are public and cannot safely contain a Telegram bot secret.
+// Development/private deployments may provide both values at runtime:
 //   FLASH_MEDIA_TELEGRAM_BOT_TOKEN=<bot token>
 //   FLASH_MEDIA_TELEGRAM_CHAT_ID=<chat id>
 function getTelegramConfig(): TelegramConfig | null {
-  const botToken = process.env.FLASH_MEDIA_TELEGRAM_BOT_TOKEN?.trim() || DEFAULT_TELEGRAM_BOT_TOKEN
-  const chatId = process.env.FLASH_MEDIA_TELEGRAM_CHAT_ID?.trim() || DEFAULT_TELEGRAM_CHAT_ID
+  const botToken = process.env.FLASH_MEDIA_TELEGRAM_BOT_TOKEN?.trim()
+  const chatId = process.env.FLASH_MEDIA_TELEGRAM_CHAT_ID?.trim()
 
   if (!botToken || !chatId) {
     return null

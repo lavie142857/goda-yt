@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
 import type {
   AuthMode,
   CookiesBrowser,
@@ -11,6 +10,7 @@ import type {
 import { pushJsRuntimeArgs, resolveYtDlpPath } from './binaries.js'
 import type { CookiesHandle } from './auth-store.js'
 import { detectPlatform } from './platform.js'
+import { getSessionTikTokDeviceId } from './tiktok-device.js'
 
 interface YtDlpFormat {
   acodec?: string
@@ -47,6 +47,8 @@ type ProbeResult = ProbeSuccessResult | ProbeFailureResult
 type ProbeAuthAttempt = 'public' | 'cookies'
 
 type TikTokExtractorProfile = 'web' | 'app-api'
+
+type YouTubeExtractorProfile = 'default' | 'web-embedded'
 
 interface FallbackMetadata {
   title: string | null
@@ -86,6 +88,13 @@ function classifyError(errorOutput: string): { message: string; category: ErrorC
     return {
       message: 'Age verification required.',
       category: 'permanent',
+    }
+  }
+
+  if (/sign in to confirm.*not a bot|confirm you.?re not a bot/.test(lower)) {
+    return {
+      message: 'YouTube temporarily blocked the public webpage.',
+      category: 'temporary',
     }
   }
 
@@ -162,7 +171,10 @@ function classifyError(errorOutput: string): { message: string; category: ErrorC
 }
 
 export class VideoInfoService {
-  constructor(private readonly getCookies: () => CookiesHandle | null = () => null) {}
+  constructor(
+    private readonly getCookies: () => CookiesHandle | null = () => null,
+    private readonly hasCookies: () => boolean = () => false,
+  ) {}
 
   async probeVideoInfo(
     url: string,
@@ -186,7 +198,8 @@ export class VideoInfoService {
       }
     }
 
-    const probeAttempts = this.buildProbeAuthAttempts(authMode)
+    const cookieSourceAvailable = this.hasCookies() || cookiesBrowser !== 'none'
+    const probeAttempts = this.buildProbeAuthAttempts(authMode, cookieSourceAvailable)
     let primaryProbe: ProbeResult | null = null
 
     for (let index = 0; index < probeAttempts.length; index++) {
@@ -230,7 +243,7 @@ export class VideoInfoService {
       platform,
       availableQualities: [this.buildAutoQuality()],
       probeLimited: true,
-      ...(recoveredMetadata
+      ...(recoveredMetadata && primaryProbe.errorInfo.category === 'temporary'
         ? {
             warning: { message: 'Limited metadata.' },
           }
@@ -252,7 +265,7 @@ export class VideoInfoService {
   ): Promise<void> {
     // Keep this modest: too many parallel probes trips YouTube rate-limiting on
     // large pastes, which is worse than a slightly slower batch.
-    const concurrency = 3
+    const concurrency = 2
     let nextIndex = 0
 
     const runNext = async (): Promise<void> => {
@@ -272,6 +285,7 @@ export class VideoInfoService {
     cookiesBrowser: CookiesBrowser,
     authAttempt: ProbeAuthAttempt,
     tiktokProfile: TikTokExtractorProfile = 'web',
+    youtubeProfile: YouTubeExtractorProfile = 'default',
   ): Promise<ProbeResult> {
     return new Promise((resolve) => {
       const executable = resolveYtDlpPath()
@@ -303,7 +317,15 @@ export class VideoInfoService {
         '--force-ipv4',
         '--socket-timeout',
         '8',
+        '--retry-sleep',
+        'http:exp=1:8',
+        '--retry-sleep',
+        'extractor:exp=1:8',
       ]
+
+      if (platform === 'youtube' || platform === 'tiktok') {
+        args.push('--sleep-requests', '0.5')
+      }
 
       if (usingCookies && cookies) {
         args.push('--cookies', cookies.path)
@@ -312,6 +334,7 @@ export class VideoInfoService {
       }
 
       pushJsRuntimeArgs(args)
+      this.pushYouTubeExtractorArgs(args, platform, youtubeProfile)
       this.pushTikTokExtractorArgs(args, platform, tiktokProfile)
       args.push(url)
 
@@ -324,7 +347,11 @@ export class VideoInfoService {
       let errorOutput = ''
 
       const timeout = setTimeout(() => {
-        child.kill()
+        if (process.platform === 'win32' && child.pid) {
+          spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true })
+        } else {
+          child.kill('SIGTERM')
+        }
         settle({
           ok: false,
           errorInfo: {
@@ -408,9 +435,36 @@ export class VideoInfoService {
     // "rehydration" extraction) with growing backoff + jitter before falling back
     // to the weaker OpenGraph metadata. TikTok gets an app API profile because the
     // public webpage intermittently omits the rehydration JSON.
-    const profiles: TikTokExtractorProfile[] = platform === 'tiktok'
-      ? ['app-api', 'app-api', 'web', 'app-api']
-      : ['web', 'web', 'web']
+    const profiles: Array<{
+      tiktok: TikTokExtractorProfile
+      youtube: YouTubeExtractorProfile
+    }> = platform === 'tiktok'
+      ? [
+          { tiktok: 'app-api', youtube: 'default' },
+          { tiktok: 'app-api', youtube: 'default' },
+          { tiktok: 'web', youtube: 'default' },
+          { tiktok: 'app-api', youtube: 'default' },
+        ]
+      : platform === 'youtube'
+        ? authAttempt === 'public'
+          ? [
+              // The regular web client is frequently challenged before it exposes
+              // public formats. Embedded remains cookie-free and currently avoids
+              // that wasted first request; retain web as a compatibility fallback.
+              { tiktok: 'web', youtube: 'web-embedded' },
+              { tiktok: 'web', youtube: 'default' },
+              { tiktok: 'web', youtube: 'web-embedded' },
+            ]
+          : [
+              { tiktok: 'web', youtube: 'default' },
+              { tiktok: 'web', youtube: 'web-embedded' },
+              { tiktok: 'web', youtube: 'default' },
+            ]
+        : [
+            { tiktok: 'web', youtube: 'default' },
+            { tiktok: 'web', youtube: 'default' },
+            { tiktok: 'web', youtube: 'default' },
+          ]
 
     let result: ProbeResult | null = null
     for (let attempt = 0; attempt < profiles.length; attempt++) {
@@ -419,8 +473,22 @@ export class VideoInfoService {
         await new Promise((r) => setTimeout(r, backoff))
       }
 
-      result = await this.probeViaYtDlp(url, platform, cookiesBrowser, authAttempt, profiles[attempt])
-      if (result.ok || result.errorInfo.category !== 'temporary') {
+      const profile = profiles[attempt]
+      result = await this.probeViaYtDlp(
+        url,
+        platform,
+        cookiesBrowser,
+        authAttempt,
+        profile.tiktok,
+        profile.youtube,
+      )
+      const shouldTryRegularYouTubeClient =
+        platform === 'youtube'
+        && authAttempt === 'public'
+        && attempt === 0
+        && profile.youtube === 'web-embedded'
+
+      if (result.ok || (result.errorInfo.category !== 'temporary' && !shouldTryRegularYouTubeClient)) {
         break
       }
     }
@@ -434,7 +502,11 @@ export class VideoInfoService {
     }
   }
 
-  private buildProbeAuthAttempts(authMode: AuthMode): ProbeAuthAttempt[] {
+  private buildProbeAuthAttempts(authMode: AuthMode, cookieSourceAvailable: boolean): ProbeAuthAttempt[] {
+    if (!cookieSourceAvailable) {
+      return ['public']
+    }
+
     if (authMode === 'cookies') {
       return ['cookies', 'public']
     }
@@ -463,9 +535,19 @@ export class VideoInfoService {
   }
 
   private canCookiesHelp(message: string): boolean {
-    return /sign in|authentication required|login required|age verification|age[-_\s]?restricted|private video|members[- ]only|join this channel|cookies|required|empty media response|account is private/i.test(
+    return /sign in|authentication required|login required|age verification|age[-_\s]?restricted|private video|members[- ]only|join this channel|cookies|required|empty media response|account is private|unexpected response from webpage request|challenge|captcha|http error 403|forbidden/i.test(
       message,
     )
+  }
+
+  private pushYouTubeExtractorArgs(
+    args: string[],
+    platform: DownloadPlatform,
+    profile: YouTubeExtractorProfile,
+  ): void {
+    if (platform === 'youtube' && profile === 'web-embedded') {
+      args.push('--extractor-args', 'youtube:player_client=web_embedded')
+    }
   }
 
   private pushTikTokExtractorArgs(
@@ -479,17 +561,8 @@ export class VideoInfoService {
 
     args.push(
       '--extractor-args',
-      `tiktok:api_hostname=api22-normal-c-useast2a.tiktokv.com;device_id=${this.buildTikTokDeviceId()};app_info=`,
+      `tiktok:device_id=${getSessionTikTokDeviceId()};app_info=`,
     )
-  }
-
-  private buildTikTokDeviceId(): string {
-    const min = 7250000000000000000n
-    const max = 7325099899999994577n
-    const span = max - min + 1n
-    const random = BigInt(`0x${randomBytes(8).toString('hex')}`)
-
-    return (min + (random % span)).toString()
   }
 
   private normalizeAvailableQualities(formats: YtDlpFormat[]): VideoQualityOption[] {
