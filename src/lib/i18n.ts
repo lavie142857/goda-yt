@@ -95,6 +95,8 @@ export interface Messages {
   recodeEncoderNote: string
   embedMetadata: string
   embedMetadataNote: string
+  reuseDownloadedFiles: string
+  reuseDownloadedFilesNote: string
   trimTitle: string
   trimStartPlaceholder: string
   trimEndPlaceholder: string
@@ -369,6 +371,8 @@ const vi: Messages = {
   recodeEncoderNote: 'Khi ép H.264 cho file >1080p: GPU (NVENC/QSV) nhanh hơn nhiều với 4K; CPU (libx264) chậm hơn nhưng chất lượng/tương thích cao nhất. Tự động sẽ dùng GPU nếu máy hỗ trợ.',
   embedMetadata: 'Nhúng thumbnail + thông tin vào file',
   embedMetadataNote: 'Gắn ảnh thumbnail làm cover và thông tin (tiêu đề, kênh...) vào file tải về.',
+  reuseDownloadedFiles: 'Dùng lại file đã tải',
+  reuseDownloadedFilesNote: 'Khi bật, video cùng định dạng và chất lượng đã tải trước đó sẽ được dùng lại hoặc sao chép sang thư mục lưu mới. Tắt để luôn tải file mới.',
   trimTitle: 'Cắt đoạn (tải 1 khúc)',
   trimStartPlaceholder: 'Bắt đầu (vd 0:30.500)',
   trimEndPlaceholder: 'Kết thúc (vd 1:45.250)',
@@ -643,6 +647,8 @@ const en: Messages = {
   recodeEncoderNote: 'When re-encoding >1080p to H.264: GPU (NVENC/QSV) is far faster for 4K; CPU (libx264) is slower but highest quality/compatibility. Auto uses the GPU when your machine supports it.',
   embedMetadata: 'Embed thumbnail + metadata into file',
   embedMetadataNote: 'Attaches the thumbnail as cover art and writes info (title, uploader...) into the downloaded file.',
+  reuseDownloadedFiles: 'Reuse previously downloaded files',
+  reuseDownloadedFilesNote: 'When enabled, matching videos already downloaded are reused or copied into the new output folder. Turn off to always download a fresh file.',
   trimTitle: 'Trim (download a clip)',
   trimStartPlaceholder: 'Start (e.g. 0:30.500)',
   trimEndPlaceholder: 'End (e.g. 1:45.250)',

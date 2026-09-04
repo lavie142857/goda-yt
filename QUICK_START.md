@@ -47,7 +47,7 @@ The installer is generated in `release\`.
 
 1. Paste supported URLs into the input area, import a `.txt` / `.csv` / `.json` file, or drag URL text into the app.
 2. Review the staging list and adjust quality, MP3/video mode, or filename before downloading.
-3. Use Settings to choose language, output folder, defaults, login/cookies, yt-dlp update behavior, and diagnostics.
+3. Use Settings to choose language, output folder, defaults, file reuse, login/cookies, yt-dlp update behavior, and diagnostics.
 4. For >1080p MP4 downloads, editor-compatible H.264 recode is enabled by default. Turn it off only when fast download/playback matters more than editor import.
 
 ## Login And Cookies

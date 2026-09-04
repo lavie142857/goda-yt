@@ -102,6 +102,7 @@ export interface AppSettings {
   forceH264: boolean
   recodeEncoder: RecodeEncoder
   embedMetadata: boolean
+  reuseDownloadedFiles: boolean
 }
 
 export interface QueueControlState {

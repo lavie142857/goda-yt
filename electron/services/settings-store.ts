@@ -71,6 +71,7 @@ export class SettingsStore {
       forceH264: normalizeBoolean(payload.forceH264, this.settings.forceH264),
       recodeEncoder: normalizeRecodeEncoder(payload.recodeEncoder, this.settings.recodeEncoder),
       embedMetadata: normalizeBoolean(payload.embedMetadata, this.settings.embedMetadata),
+      reuseDownloadedFiles: normalizeBoolean(payload.reuseDownloadedFiles, this.settings.reuseDownloadedFiles),
     }
 
     this.settings = next
@@ -115,6 +116,7 @@ export class SettingsStore {
       forceH264: normalizeBoolean(parsed.forceH264, defaultSettings.forceH264),
       recodeEncoder: normalizeRecodeEncoder(parsed.recodeEncoder, defaultSettings.recodeEncoder),
       embedMetadata: normalizeBoolean(parsed.embedMetadata, defaultSettings.embedMetadata),
+      reuseDownloadedFiles: normalizeBoolean(parsed.reuseDownloadedFiles, defaultSettings.reuseDownloadedFiles),
     }
   }
 
@@ -175,6 +177,7 @@ function getDefaultSettings(): AppSettings {
     forceH264: true,
     recodeEncoder: 'auto',
     embedMetadata: true,
+    reuseDownloadedFiles: true,
   }
 }
 

@@ -92,6 +92,10 @@ export class DownloadManager {
   // Any unexpected failure returns false so we fall back to a normal download
   // rather than leaving the task stuck.
   private async tryReuseExisting(task: DownloadTask, signal: AbortSignal): Promise<boolean> {
+    if (!this.settingsStore.get().reuseDownloadedFiles) {
+      return false
+    }
+
     try {
       const key = this.reuseKey(task.request)
       const entry = this.historyStore.find(key)

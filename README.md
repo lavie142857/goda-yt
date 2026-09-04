@@ -15,6 +15,7 @@ Desktop downloader for YouTube, TikTok, Facebook, and Instagram videos using Ele
 - Import URL files and automatically dedupe repeated links.
 - Batch-adjust quality and format before download.
 - Save preferences for default format, output folder, concurrency, and retries.
+- Reuse matching files from download history by default, with a Settings toggle to always download a fresh copy.
 - Preserve per-item `quality`, `format`, and duration metadata all the way down to yt-dlp arguments.
 - Editor-compatible mode is enabled by default for >1080p MP4 downloads: the app re-encodes to H.264 and reports real recode progress.
 

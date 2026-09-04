@@ -2340,6 +2340,23 @@ function App() {
                 <small>{t.embedMetadataNote}</small>
               </div>
 
+              <div className="settings-auto-row">
+                <label className="switch-line">
+                  <input
+                    className="switch-input"
+                    type="checkbox"
+                    checked={settings?.reuseDownloadedFiles ?? true}
+                    onChange={(event) => void updateSettings({ reuseDownloadedFiles: event.target.checked })}
+                    disabled={!settings}
+                  />
+                  <span className="switch-track" aria-hidden="true">
+                    <span className="switch-thumb" />
+                  </span>
+                  <span className="switch-text">{t.reuseDownloadedFiles}</span>
+                </label>
+                <small>{t.reuseDownloadedFilesNote}</small>
+              </div>
+
               <div className="settings-section-label">{t.outputFolder}</div>
 
               <div className="folder-row">
