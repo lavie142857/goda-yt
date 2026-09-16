@@ -10,6 +10,7 @@ import {
 import { detectPlatform } from './platform.js'
 import { CPU_H264_RECODE_ARGS, resolveH264RecodePlan } from './gpu.js'
 import { getSessionTikTokDeviceId } from './tiktok-device.js'
+import { ytDlpOperationGate } from './yt-dlp-gate.js'
 import type { CookiesHandle } from './auth-store.js'
 import type {
   AppSettings,
@@ -24,7 +25,7 @@ import type {
 interface DownloadExecOptions {
   settings: AppSettings
   onProgress: (patch: { percent?: number; speed?: string; eta?: string; stage?: string }) => void
-  onOutputFile: (outputFile: string) => void
+  onOutputFile: (outputFile: string, dimensions?: { width: number; height: number }) => void
   signal: AbortSignal
 }
 
@@ -51,12 +52,18 @@ export class YtDlpDownloadError extends Error {
 }
 
 export class YtDlpService {
+  private readonly reservedOutputStems = new Set<string>()
+
   constructor(
     private readonly getCookies: () => CookiesHandle | null = () => null,
     private readonly hasCookies: () => boolean = () => false,
   ) {}
 
   async probe(): Promise<YtDlpProbe> {
+    return ytDlpOperationGate.runOperation(() => this.probeUnlocked())
+  }
+
+  private probeUnlocked(): Promise<YtDlpProbe> {
     const executable = resolveYtDlpPath()
 
     return new Promise((resolve) => {
@@ -103,6 +110,10 @@ export class YtDlpService {
   }
 
   async updateBinary(): Promise<YtDlpUpdateResult> {
+    return ytDlpOperationGate.runMaintenance(() => this.updateBinaryUnlocked())
+  }
+
+  private updateBinaryUnlocked(): Promise<YtDlpUpdateResult> {
     const executable = resolveYtDlpPath()
 
     return new Promise((resolve) => {
@@ -142,7 +153,7 @@ export class YtDlpService {
           return
         }
 
-        const probe = await this.probe()
+        const probe = await this.probeUnlocked()
         resolve({
           ok: probe.available,
           version: probe.version,
@@ -154,6 +165,20 @@ export class YtDlpService {
   }
 
   async download(
+    request: DownloadRequest,
+    options: DownloadExecOptions,
+  ): Promise<void> {
+    return ytDlpOperationGate.runOperation(async () => {
+      const reservation = this.reserveOutputRequest(request, options.settings)
+      try {
+        await this.downloadUnlocked(reservation.request, options)
+      } finally {
+        reservation.release()
+      }
+    })
+  }
+
+  private async downloadUnlocked(
     request: DownloadRequest,
     options: DownloadExecOptions,
   ): Promise<void> {
@@ -235,8 +260,14 @@ export class YtDlpService {
           }
 
           if (line.startsWith('FLASH_OUTPUT|')) {
-            const outputFile = this.resolveOutputFilePath(line.slice('FLASH_OUTPUT|'.length), outputDir)
-            options.onOutputFile(outputFile)
+            const [, rawPath = '', rawWidth = '', rawHeight = ''] = line.split('|')
+            const outputFile = this.resolveOutputFilePath(rawPath, outputDir)
+            const width = Number(rawWidth)
+            const height = Number(rawHeight)
+            const dimensions = Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0
+              ? { width, height }
+              : undefined
+            options.onOutputFile(outputFile, dimensions)
             return
           }
 
@@ -370,14 +401,19 @@ export class YtDlpService {
       }
     }
 
-    const runDownloadAttempt = async (authAttempt: DownloadAuthAttempt): Promise<void> => {
+    const runDownloadAttempt = async (
+      authAttempt: DownloadAuthAttempt,
+      qualityFallback = false,
+    ): Promise<void> => {
       // Decrypt cookies only for an authenticated attempt. Public attempts must not
       // attach cookies or --cookies-from-browser, otherwise stale auth can break
       // public YouTube videos.
       const cookies = authAttempt === 'cookies' ? this.getCookies() : null
       const cookiesPath = cookies?.path ?? null
       const initialYouTubeProfile: YouTubeExtractorProfile =
-        platform === 'youtube' && authAttempt === 'public' ? 'web-embedded' : 'default'
+        platform === 'youtube' && authAttempt === 'public' && !qualityFallback
+          ? 'web-embedded'
+          : 'default'
 
       try {
         const baseProfile = this.getDefaultTikTokExtractorProfile(platform)
@@ -386,6 +422,7 @@ export class YtDlpService {
           options.settings,
           {
             relaxed: false,
+            qualityFallback,
             platform,
             authAttempt,
             tiktokProfile: baseProfile,
@@ -405,7 +442,9 @@ export class YtDlpService {
         const shouldTryAlternateYouTubeClient =
           initialYouTubeProfile === 'web-embedded'
             ? platform === 'youtube' && details !== 'DOWNLOAD_ABORTED'
-            : this.shouldRetryWithYouTubeEmbedded(details, platform)
+            : qualityFallback && platform === 'youtube' && details !== 'DOWNLOAD_ABORTED'
+              ? true
+              : this.shouldRetryWithYouTubeEmbedded(details, platform)
 
         if (shouldTryAlternateYouTubeClient) {
           const fallbackProfiles: YouTubeExtractorProfile[] = initialYouTubeProfile === 'default'
@@ -417,9 +456,10 @@ export class YtDlpService {
             }
 
             options.onProgress({
+              percent: 0,
               speed: '-',
               eta: '--:--',
-              stage: 'dang-ket-noi',
+              stage: 'dang-thu-nguon-khac',
             })
 
             try {
@@ -428,6 +468,7 @@ export class YtDlpService {
                 options.settings,
                 {
                   relaxed: false,
+                  qualityFallback,
                   platform,
                   authAttempt,
                   tiktokProfile: this.getDefaultTikTokExtractorProfile(platform),
@@ -455,6 +496,7 @@ export class YtDlpService {
               options.settings,
               {
                 relaxed: false,
+                qualityFallback,
                 platform,
                 authAttempt,
                 tiktokProfile: this.getDefaultTikTokExtractorProfile(platform),
@@ -475,6 +517,7 @@ export class YtDlpService {
               options.settings,
               {
                 relaxed: true,
+                qualityFallback,
                 platform,
                 authAttempt,
                 tiktokProfile: this.getDefaultTikTokExtractorProfile(platform),
@@ -496,7 +539,7 @@ export class YtDlpService {
               await runWithArgs(this.buildArgs(
                 request,
                 options.settings,
-                { relaxed: false, platform, authAttempt, tiktokProfile: rescueProfile },
+                { relaxed: false, qualityFallback, platform, authAttempt, tiktokProfile: rescueProfile },
                 cookiesPath,
               ))
               return
@@ -508,7 +551,7 @@ export class YtDlpService {
                   await runWithArgs(this.buildArgs(
                     request,
                     options.settings,
-                    { relaxed: true, platform, authAttempt, tiktokProfile: rescueProfile },
+                    { relaxed: true, qualityFallback, platform, authAttempt, tiktokProfile: rescueProfile },
                     cookiesPath,
                   ))
                   return
@@ -536,6 +579,7 @@ export class YtDlpService {
       options.settings.authMode ?? 'public',
       cookieSourceAvailable,
     )
+    const requestedHeight = this.resolveRequestedHeight(request.quality)
     let lastError: Error | null = null
 
     for (let index = 0; index < authAttempts.length; index++) {
@@ -547,8 +591,44 @@ export class YtDlpService {
       } catch (error) {
         lastError = error as Error
         const nextAuthAttempt = authAttempts[index + 1]
-        if (!this.shouldTryNextDownloadAuth(lastError.message, authAttempt, nextAuthAttempt)) {
+        const exactQualityUnavailable = Boolean(
+          platform === 'youtube'
+          && requestedHeight
+          && /requested format is not available/i.test(lastError.message),
+        )
+        if (
+          !exactQualityUnavailable
+          && !this.shouldTryNextDownloadAuth(lastError.message, authAttempt, nextAuthAttempt)
+        ) {
           break
+        }
+      }
+    }
+
+    // Only downgrade after exact-quality attempts exhausted every available
+    // client/auth route. The final file is probed and relabelled by DownloadManager.
+    const canTryLowerQuality = /requested format is not available|no video formats|http error (?:403|429)|forbidden|not a bot|missing required visitor data/i.test(
+      lastError?.message ?? '',
+    )
+    if (
+      platform === 'youtube'
+      && request.variantSelector?.trim()
+      && requestedHeight
+      && canTryLowerQuality
+    ) {
+      options.onProgress({
+        percent: 0,
+        speed: '-',
+        eta: '--:--',
+        stage: 'dang-ha-chat-luong',
+      })
+      for (const authAttempt of authAttempts) {
+        try {
+          await runDownloadAttempt(authAttempt, true)
+          finalizeOutput()
+          return
+        } catch (error) {
+          lastError = error as Error
         }
       }
     }
@@ -633,6 +713,7 @@ export class YtDlpService {
     settings: AppSettings,
     options: {
       relaxed: boolean
+      qualityFallback?: boolean
       platform: DownloadPlatform | null
       authAttempt: DownloadAuthAttempt
       tiktokProfile?: TikTokExtractorProfile
@@ -655,10 +736,14 @@ export class YtDlpService {
       // the UI still receives FLASH_PROGRESS events during the transfer.
       '--progress',
       '--no-playlist',
+      // Preserve .part files and reuse already downloaded streams when a retry is
+      // caused by merge/recode rather than transferring the media again.
+      '--continue',
+      '--part',
       '--progress-template',
       'download:FLASH_PROGRESS|%(info.format_id)s|%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s',
       '--print',
-      'after_move:FLASH_OUTPUT|%(filepath)s',
+      'after_move:FLASH_OUTPUT|%(filepath)s|%(width)s|%(height)s',
       '--retries',
       String(settings.maxRetries),
       '--fragment-retries',
@@ -809,20 +894,23 @@ export class YtDlpService {
     defaultFormat: OutputFormat,
     forceH264: boolean,
     recodeArgs: string | null | undefined,
-    options: { relaxed: boolean; platform: DownloadPlatform | null },
+    options: { relaxed: boolean; qualityFallback?: boolean; platform: DownloadPlatform | null },
   ): void {
     const requestedFormat = request.format ?? defaultFormat
     const maxHeight = this.resolveRequestedHeight(request.quality)
     const selectorMaxHeight = this.shouldDropHeightOnRelaxed(options) ? null : maxHeight
 
-    if (request.variantSelector?.trim() && options.platform === 'youtube' && requestedFormat === 'mp4') {
+    if (request.variantSelector?.trim() && options.platform === 'youtube') {
       if (requestedFormat === 'mp4') {
         // MP4 output should always have AAC audio (never Opus) and an editor-
         // friendly video codec. YouTube only has H.264 up to 1080p; above that it's
         // VP9/AV1. So: at ≤1080p use H.264 (perfect for Premiere); above 1080p honor
         // the chosen resolution but prefer VP9 over AV1 (av01 breaks many editors).
         const height = this.resolveRequestedHeight(request.quality)
-        const hf = height ? `[height<=${height}]` : ''
+        // A quality chip is an exact request. height<=N silently produced a lower
+        // stream while the filename still carried the requested quality label.
+        const heightOperator = options.qualityFallback ? '<=' : '='
+        const hf = height ? `[height${heightOperator}${height}]` : ''
 
         if (!height || height <= 1080) {
           args.push('-S', `${height ? `res:${height},` : ''}vcodec:h264,acodec:aac`)
@@ -854,6 +942,19 @@ export class YtDlpService {
         }
         return
       }
+
+      if (!options.qualityFallback) {
+        args.push('-f', request.variantSelector.trim())
+        this.pushContainerArgs(args, requestedFormat)
+        return
+      }
+    }
+
+    // Metadata probing already selected the exact Facebook/TikTok/Instagram
+    // stream for the quality chip. Honor it before the generic selector: portrait
+    // sources report their long edge as `height`, so `[height<=1080]` can reject a
+    // genuine 1080x1920 stream and silently choose a 540p combined fallback.
+    if (request.variantSelector?.trim() && options.platform !== 'youtube' && !options.relaxed) {
       args.push('-f', request.variantSelector.trim())
       this.pushContainerArgs(args, requestedFormat)
       return
@@ -1010,6 +1111,51 @@ export class YtDlpService {
     return `${sanitized}.%(ext)s`
   }
 
+  private reserveOutputRequest(
+    request: DownloadRequest,
+    settings: AppSettings,
+  ): { request: DownloadRequest; release: () => void } {
+    const originalStem = this.sanitizeFileStem(request.title)
+    if (!originalStem) {
+      return { request, release: () => undefined }
+    }
+
+    const outputDir = request.outputDir?.trim() || settings.outputDir
+    let existingNames: string[] = []
+    try {
+      existingNames = readdirSync(outputDir).map((name) => name.toLowerCase())
+    } catch {
+      // The output directory may not exist yet; yt-dlp creates it before writing.
+    }
+
+    const isTaken = (stem: string): boolean => {
+      const normalizedStem = stem.toLowerCase()
+      const reservationKey = path.join(outputDir, normalizedStem).toLowerCase()
+      if (this.reservedOutputStems.has(reservationKey)) return true
+
+      const prefix = `${normalizedStem}.`
+      return existingNames.some(
+        (name) => name.startsWith(prefix)
+          && !name.endsWith('.part')
+          && !name.endsWith('.ytdl')
+          && !/\.f\d+\.[a-z0-9]+$/i.test(name),
+      )
+    }
+
+    let stem = originalStem
+    for (let suffix = 2; isTaken(stem); suffix++) {
+      const suffixText = ` (${suffix})`
+      stem = `${originalStem.slice(0, Math.max(1, 160 - suffixText.length)).trimEnd()}${suffixText}`
+    }
+
+    const reservationKey = path.join(outputDir, stem.toLowerCase()).toLowerCase()
+    this.reservedOutputStems.add(reservationKey)
+    return {
+      request: { ...request, title: stem },
+      release: () => this.reservedOutputStems.delete(reservationKey),
+    }
+  }
+
   private sanitizeFileStem(raw: string | null | undefined): string | null {
     if (!raw) {
       return null
@@ -1031,7 +1177,23 @@ export class YtDlpService {
       return null
     }
 
-    const capped = cleaned.slice(0, 160)
+    // Keep the quality marker at the end when long social captions are capped.
+    // DownloadManager relies on this marker to relabel a verified fallback from
+    // e.g. [1080p] to [540p]. Cutting it off left misleading filenames behind.
+    const qualityTags = [...cleaned.matchAll(/\[\s*(?:auto|mp3|\d{3,4}p)\s*\]/ig)]
+    const qualityTag = qualityTags.at(-1)?.[0] ?? ''
+    const trimTag = cleaned.match(/\[cut\s+[^\]]+\]\s*$/i)?.[0]?.trim() ?? ''
+    let base = cleaned
+    if (trimTag) base = base.slice(0, base.lastIndexOf(trimTag)).trimEnd()
+    if (qualityTag) {
+      const qualityIndex = base.lastIndexOf(qualityTag)
+      if (qualityIndex >= 0) {
+        base = `${base.slice(0, qualityIndex)}${base.slice(qualityIndex + qualityTag.length)}`.trim()
+      }
+    }
+    const suffix = [qualityTag, trimTag].filter(Boolean).join(' ')
+    const baseLimit = Math.max(1, 160 - (suffix ? suffix.length + 1 : 0))
+    const capped = `${base.slice(0, baseLimit).trimEnd()}${suffix ? ` ${suffix}` : ''}`
     if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(capped)) {
       return `_${capped}`
     }

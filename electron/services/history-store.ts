@@ -16,8 +16,9 @@ const HISTORY_FILE = 'download-history.json'
 const MAX_ENTRIES = 1000
 // Bump whenever the reuse-key format changes. Entries written under an older
 // scheme are discarded on load so a stale key can never reuse the wrong file.
-// v2: reuse keys now encode the trim (clip) range.
-const SCHEMA_VERSION = 2
+// v2: reuse keys encode the trim (clip) range.
+// v3: MP4 video keys distinguish guaranteed H.264 from native-codec output.
+const SCHEMA_VERSION = 3
 
 // Persistent record of completed downloads, keyed by video + quality, so the
 // same video at the same quality can be re-used (copied) instead of re-downloaded.

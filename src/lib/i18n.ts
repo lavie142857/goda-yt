@@ -48,6 +48,11 @@ export interface Messages {
   loginToDownload: string
   reusedBadge: string
   reusedHint: string
+  actualQuality: string
+  qualityDowngraded: (requested: string, actual: string) => string
+  outputUnverified: string
+  durationMismatch: string
+  missingAudio: string
   limitedData: string
   editFileNamePlaceholder: string
   fileNameTitle: string
@@ -97,6 +102,7 @@ export interface Messages {
   embedMetadataNote: string
   reuseDownloadedFiles: string
   reuseDownloadedFilesNote: string
+  telemetryDisclosure: string
   trimTitle: string
   trimStartPlaceholder: string
   trimEndPlaceholder: string
@@ -202,6 +208,8 @@ export interface Messages {
   statusPending: string
   statusActive: string
   statusConnecting: string
+  statusTryingSource: string
+  statusLoweringQuality: string
   statusRecode: string
   statusAudioProcessing: string
   statusCopying: string
@@ -324,6 +332,11 @@ const vi: Messages = {
   loginToDownload: '🔑 Đăng nhập để tải',
   reusedBadge: 'Dùng lại',
   reusedHint: 'Đã có sẵn từ lần tải trước — sao chép sang thư mục lưu, không tải lại.',
+  actualQuality: 'Thực tế',
+  qualityDowngraded: (requested, actual) => `Đã hạ ${requested} → ${actual}`,
+  outputUnverified: 'Không xác minh được file đầu ra; file này sẽ không được dùng lại tự động.',
+  durationMismatch: 'Thời lượng file khác đáng kể so với video gốc; không lưu vào cache.',
+  missingAudio: 'File đầu ra không có audio; không lưu vào cache.',
   limitedData: 'Dữ liệu giới hạn',
   editFileNamePlaceholder: 'Chỉnh sửa tên file...',
   fileNameTitle: 'Tên file khi tải',
@@ -362,17 +375,18 @@ const vi: Messages = {
   updating: 'Đang cập nhật',
   updateYtDlp: 'Cập nhật yt-dlp',
   autoUpdateYtDlp: 'Tự cập nhật yt-dlp',
-  forceH264: 'Tương thích Premiere (ép H.264 cho >1080p)',
+  forceH264: 'Premiere / H.264',
   forceH264Note: 'Mặc định bật để file >1080p/4K import tốt vào Premiere/trình biên tập. Có thể tắt nếu ưu tiên tải nhanh và chỉ cần xem (giữ VP9/AV1).',
-  recodeEncoderLabel: 'Bộ mã hóa khi re-encode',
+  recodeEncoderLabel: 'Bộ mã hóa',
   recodeAuto: 'Tự động (ưu tiên GPU)',
   recodeGpu: 'GPU (nhanh)',
   recodeCpu: 'CPU (chất lượng)',
   recodeEncoderNote: 'Khi ép H.264 cho file >1080p: GPU (NVENC/QSV) nhanh hơn nhiều với 4K; CPU (libx264) chậm hơn nhưng chất lượng/tương thích cao nhất. Tự động sẽ dùng GPU nếu máy hỗ trợ.',
-  embedMetadata: 'Nhúng thumbnail + thông tin vào file',
+  embedMetadata: 'Nhúng thumbnail và metadata',
   embedMetadataNote: 'Gắn ảnh thumbnail làm cover và thông tin (tiêu đề, kênh...) vào file tải về.',
   reuseDownloadedFiles: 'Dùng lại file đã tải',
   reuseDownloadedFilesNote: 'Khi bật, video cùng định dạng và chất lượng đã tải trước đó sẽ được dùng lại hoặc sao chép sang thư mục lưu mới. Tắt để luôn tải file mới.',
+  telemetryDisclosure: 'Bản nội bộ gửi mã cài đặt, tên máy, tài khoản Windows, phiên bản hệ điều hành, IP nội bộ và IP công khai để xác thực bản quyền, đồng thời gửi lỗi kỹ thuật.',
   trimTitle: 'Cắt đoạn (tải 1 khúc)',
   trimStartPlaceholder: 'Bắt đầu (vd 0:30.500)',
   trimEndPlaceholder: 'Kết thúc (vd 1:45.250)',
@@ -478,6 +492,8 @@ const vi: Messages = {
   statusPending: 'Chờ tải',
   statusActive: 'Đang tải',
   statusConnecting: 'Đang kết nối',
+  statusTryingSource: 'Đang thử nguồn YouTube khác',
+  statusLoweringQuality: 'Đang hạ chất lượng',
   statusRecode: 'Đang chuyển mã',
   statusAudioProcessing: 'Đang xử lý audio',
   statusCopying: 'Đang sao chép',
@@ -600,6 +616,11 @@ const en: Messages = {
   loginToDownload: '🔑 Log in to download',
   reusedBadge: 'Reused',
   reusedHint: 'Already downloaded before — copied to your save folder instead of re-downloading.',
+  actualQuality: 'Actual',
+  qualityDowngraded: (requested, actual) => `Lowered ${requested} → ${actual}`,
+  outputUnverified: 'The output could not be verified and will not be reused automatically.',
+  durationMismatch: 'The output duration differs significantly from the source and will not be cached.',
+  missingAudio: 'The output has no audio and will not be cached.',
   limitedData: 'Limited data',
   editFileNamePlaceholder: 'Edit file name...',
   fileNameTitle: 'File name when downloaded',
@@ -638,17 +659,18 @@ const en: Messages = {
   updating: 'Updating',
   updateYtDlp: 'Update yt-dlp',
   autoUpdateYtDlp: 'Auto-update yt-dlp',
-  forceH264: 'Editor-compatible (re-encode >1080p to H.264)',
+  forceH264: 'Premiere / H.264',
   forceH264Note: 'Enabled by default so >1080p/4K imports cleanly into Premiere/editors. Turn off when download speed matters more and you only need playback (keeps VP9/AV1).',
-  recodeEncoderLabel: 'Re-encode with',
+  recodeEncoderLabel: 'Encoder',
   recodeAuto: 'Auto (prefer GPU)',
   recodeGpu: 'GPU (fast)',
   recodeCpu: 'CPU (quality)',
   recodeEncoderNote: 'When re-encoding >1080p to H.264: GPU (NVENC/QSV) is far faster for 4K; CPU (libx264) is slower but highest quality/compatibility. Auto uses the GPU when your machine supports it.',
-  embedMetadata: 'Embed thumbnail + metadata into file',
+  embedMetadata: 'Embed thumbnail and metadata',
   embedMetadataNote: 'Attaches the thumbnail as cover art and writes info (title, uploader...) into the downloaded file.',
   reuseDownloadedFiles: 'Reuse previously downloaded files',
   reuseDownloadedFilesNote: 'When enabled, matching videos already downloaded are reused or copied into the new output folder. Turn off to always download a fresh file.',
+  telemetryDisclosure: 'The internal build sends the install ID, machine name, Windows account, OS version, local IP and public IP for license verification, plus technical errors.',
   trimTitle: 'Trim (download a clip)',
   trimStartPlaceholder: 'Start (e.g. 0:30.500)',
   trimEndPlaceholder: 'End (e.g. 1:45.250)',
@@ -754,6 +776,8 @@ const en: Messages = {
   statusPending: 'Pending',
   statusActive: 'Downloading',
   statusConnecting: 'Connecting',
+  statusTryingSource: 'Trying another YouTube source',
+  statusLoweringQuality: 'Lowering quality',
   statusRecode: 'Re-encoding',
   statusAudioProcessing: 'Processing audio',
   statusCopying: 'Copying',

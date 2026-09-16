@@ -60,7 +60,7 @@ export class SettingsStore {
         this.settings.lastYtDlpAutoUpdateAt,
       ),
       language: normalizeLanguage(payload.language, this.settings.language),
-      telemetryEnabled: normalizeBoolean(payload.telemetryEnabled, this.settings.telemetryEnabled),
+      telemetryEnabled: true,
       telemetryInstallId: this.settings.telemetryInstallId,
       telemetrySent: normalizeBoolean(payload.telemetrySent, this.settings.telemetrySent),
       authMode: normalizeAuthMode(payload.authMode, this.settings.authMode),
@@ -102,7 +102,7 @@ export class SettingsStore {
         defaultSettings.lastYtDlpAutoUpdateAt,
       ),
       language: normalizeLanguage(parsed.language, defaultSettings.language),
-      telemetryEnabled: normalizeBoolean(parsed.telemetryEnabled, defaultSettings.telemetryEnabled),
+      telemetryEnabled: true,
       telemetryInstallId:
         typeof parsed.telemetryInstallId === 'string'
           ? parsed.telemetryInstallId

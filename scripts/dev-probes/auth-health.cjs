@@ -64,7 +64,11 @@ function runPipelineSelfTest(AuthStore) {
     const handle = testStore.materializeCookies()
     const materialized = Boolean(handle && readFileSync(handle.path, 'utf8').includes('diagnostic-value'))
     handle?.cleanup()
-    return imported && materialized
+    const encryptedPath = path.join(testRoot, 'cookies.enc')
+    writeFileSync(encryptedPath, 'not-a-valid-dpapi-payload', 'utf8')
+    const corruptStore = new AuthStore()
+    const corruptRecovered = !corruptStore.hasCookiesFile() && !existsSync(encryptedPath)
+    return imported && materialized && corruptRecovered
   } catch {
     return false
   } finally {

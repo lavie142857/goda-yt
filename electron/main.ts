@@ -13,7 +13,6 @@ import { reportError, sendBugReport, sendInstallTelemetry, sendUpdateSuccess } f
 import { YtDlpService } from './services/yt-dlp-service.js'
 import { VideoInfoService } from './services/video-info-service.js'
 import type {
-  AppSettings,
   DiagnosticsCheck,
   DiagnosticsReport,
   DownloadTask,
@@ -169,21 +168,13 @@ function detectTaskTransitions(tasks: DownloadTask[]): void {
   }
 }
 
-function shouldRunAutoUpdate(settings: AppSettings): boolean {
-  if (!settings.autoUpdateYtDlp) {
-    return false
-  }
-
-  if (settings.ytDlpAutoUpdateMode === 'on-start') {
+function shouldRunAutoUpdate(lastSuccessfulUpdateAt: number | null): boolean {
+  if (lastSuccessfulUpdateAt === null) {
     return true
   }
 
-  if (settings.lastYtDlpAutoUpdateAt === null) {
-    return true
-  }
-
-  const oneWeekMs = 7 * 24 * 60 * 60 * 1000
-  return Date.now() - settings.lastYtDlpAutoUpdateAt >= oneWeekMs
+  const oneDayMs = 24 * 60 * 60 * 1000
+  return Date.now() - lastSuccessfulUpdateAt >= oneDayMs
 }
 
 async function runScheduledAutoUpdate(): Promise<void> {
@@ -192,7 +183,7 @@ async function runScheduledAutoUpdate(): Promise<void> {
   }
 
   const settings = settingsStore.get()
-  if (!shouldRunAutoUpdate(settings)) {
+  if (!shouldRunAutoUpdate(settings.lastYtDlpAutoUpdateAt)) {
     return
   }
 
@@ -529,17 +520,29 @@ function registerIpcHandlers(): void {
   ipcMain.handle('clipboard:read', () => clipboard.readText())
 
   ipcMain.handle('network:ping', async () => {
-    const start = Date.now()
-    return new Promise<{ ok: boolean; latencyMs: number }>((resolve) => {
-      const request = httpsGet('https://www.google.com/generate_204', (response) => {
+    const endpoints = [
+      'https://www.google.com/generate_204',
+      'https://cp.cloudflare.com/generate_204',
+      'https://www.youtube.com/generate_204',
+    ]
+
+    const pingEndpoint = (url: string) => new Promise<{ ok: boolean; latencyMs: number }>((resolve) => {
+      const start = Date.now()
+      const request = httpsGet(url, (response) => {
         const statusCode = response.statusCode ?? 0
         response.resume()
         const ok = statusCode >= 200 && statusCode < 400
         resolve({ ok, latencyMs: ok ? Date.now() - start : -1 })
       })
-      request.setTimeout(5000, () => request.destroy(new Error('timeout')))
+      request.setTimeout(3000, () => request.destroy(new Error('timeout')))
       request.on('error', () => resolve({ ok: false, latencyMs: -1 }))
     })
+
+    for (const endpoint of endpoints) {
+      const result = await pingEndpoint(endpoint)
+      if (result.ok) return result
+    }
+    return { ok: false, latencyMs: -1 }
   })
 
   ipcMain.handle('report:error', async (_event, context: string, message: string) => {

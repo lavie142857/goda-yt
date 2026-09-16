@@ -13,6 +13,7 @@ dist
 dist-electron
 dist-ssr
 *.local
+.telemetry.local.json
 .cache/
 
 # Editor directories and files

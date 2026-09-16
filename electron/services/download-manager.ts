@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { copyFile, mkdir } from 'node:fs/promises'
+import { copyFile, mkdir, rename } from 'node:fs/promises'
 import path from 'node:path'
 import { detectPlatform } from './platform.js'
 import { HistoryStore } from './history-store.js'
+import { probeMediaFile } from './media-probe.js'
+import type { MediaProbeResult } from './media-probe.js'
+import { isH264Codec, recodeMediaToH264 } from './h264-recoder.js'
 import { SettingsStore } from './settings-store.js'
 import { canonicalizeVideoKey } from './video-key.js'
 import { YtDlpDownloadError, YtDlpService } from './yt-dlp-service.js'
@@ -33,6 +36,8 @@ export class DownloadManager {
     private readonly ytDlpService: YtDlpService,
     private readonly historyStore: HistoryStore,
     private readonly onQueueChanged: (tasks: DownloadTask[]) => void,
+    private readonly inspectMedia: typeof probeMediaFile = probeMediaFile,
+    private readonly ensureH264: typeof recodeMediaToH264 = recodeMediaToH264,
   ) {}
 
   // History key: same video + same preset/quality/format -> same produced file.
@@ -45,13 +50,13 @@ export class DownloadManager {
     const quality = platform === 'youtube' ? (request.quality ?? '') : ''
     const format = request.format ?? ''
 
-    // forceH264 changes the produced file ONLY for >1080p MP4 (VP9 vs re-encoded
-    // H.264). Tag the key with the resulting codec there so toggling the setting
-    // doesn't reuse a wrong-codec cached file. ≤1080p / non-mp4 is unaffected.
-    const height = Number(request.quality?.match(/(\d{3,4})/)?.[1] ?? 0)
+    // Editor mode guarantees H.264 for every MP4 resolution. Keep its cache
+    // separate from native-codec MP4 downloads so toggling the setting can never
+    // reuse a VP9/AV1 file that only happens to have an .mp4 extension.
+    const requestedFormat = request.format ?? this.settingsStore.get().defaultFormat
     const codecTag =
-      platform === 'youtube' && format === 'mp4' && height > 1080
-        ? (this.settingsStore.get().forceH264 ? '|h264' : '|vp9')
+      requestedFormat === 'mp4' && !this.isAudioOnly(request)
+        ? (this.settingsStore.get().forceH264 ? '|h264' : '|native')
         : ''
 
     // Only append the trim segment when trimming, so full-video downloads keep the
@@ -109,6 +114,25 @@ export class DownloadManager {
         return false
       }
 
+      const probe = await this.inspectMedia(entry.outputFile)
+      const requestedHeight = this.resolveRequestedHeight(task.request.quality)
+      if (
+        !probe
+        || !this.hasRequiredStreams(task.request, probe)
+        || !this.hasAcceptableDuration(task.request, probe.duration)
+        || (this.shouldEnsureH264(task.request) && !isH264Codec(probe.videoCodec))
+        || (
+          task.platform === 'youtube'
+          && requestedHeight
+          && probe.qualityHeight !== requestedHeight
+        )
+      ) {
+        // Reject damaged/unverifiable cache entries and old lower-quality files
+        // written under an exact YouTube quality key.
+        this.historyStore.remove(key)
+        return false
+      }
+
       if (signal.aborted) {
         throw new Error('DOWNLOAD_ABORTED')
       }
@@ -127,6 +151,7 @@ export class DownloadManager {
       }
 
       task.outputFile = existsSync(targetPath) ? targetPath : entry.outputFile
+      this.applyActualProbe(task, probe)
       task.reused = true
       task.status = 'completed'
       task.progress = { percent: 100, speed: '-', eta: '00:00', stage: 'sao-chep' }
@@ -323,6 +348,14 @@ export class DownloadManager {
     task.error = undefined
     task.outputFile = undefined
     task.reused = false
+    task.actualQuality = undefined
+    task.actualWidth = undefined
+    task.actualHeight = undefined
+    task.actualDuration = undefined
+    task.actualHasAudio = undefined
+    task.actualVideoCodec = undefined
+    task.qualityFallbackUsed = false
+    task.validationWarning = undefined
     task.queueIndex = this.nextQueueIndex()
     task.progress = {
       percent: 0,
@@ -414,10 +447,14 @@ export class DownloadManager {
           const nextStage = patch.stage ?? task.progress.stage
           const startsRecode = nextStage === 'dang-chuyen-ma'
             && task.progress.stage !== 'dang-chuyen-ma'
+          const startsFallback = nextStage === 'dang-ha-chat-luong'
+            && task.progress.stage !== 'dang-ha-chat-luong'
+          const startsSourceRetry = nextStage === 'dang-thu-nguon-khac'
+            && task.progress.stage !== 'dang-thu-nguon-khac'
           const requestedPercent = patch.percent ?? task.progress.percent
           // Download retries/fallbacks may restart their raw counter. Keep the UI
           // monotonic except when recode intentionally starts its own real 0-100%.
-          const nextPercent = startsRecode
+          const nextPercent = startsRecode || startsFallback || startsSourceRetry
             ? requestedPercent
             : Math.max(task.progress.percent, requestedPercent)
 
@@ -432,20 +469,60 @@ export class DownloadManager {
           task.updatedAt = Date.now()
           this.emitQueue()
         },
-        onOutputFile: (outputFile: string) => {
+        onOutputFile: (outputFile: string, dimensions?: { width: number; height: number }) => {
           task.outputFile = outputFile
+          if (dimensions) {
+            task.actualWidth = dimensions.width
+            task.actualHeight = Math.min(dimensions.width, dimensions.height)
+            task.actualQuality = `${task.actualHeight}p`
+          }
           task.updatedAt = Date.now()
           this.emitQueue()
         },
       })
+
+      if (!task.outputFile) {
+        throw new YtDlpDownloadError('Download completed but no output file was found.', true)
+      }
+
+      let probe = await this.inspectMedia(task.outputFile)
+      if (this.shouldEnsureH264(task.request) && !isH264Codec(probe?.videoCodec)) {
+        await this.ensureH264(task.outputFile, {
+          encoder: this.settingsStore.get().recodeEncoder,
+          duration: probe?.duration ?? this.expectedDuration(task.request),
+          signal: controller.signal,
+          onProgress: (patch) => {
+            task.progress = {
+              ...task.progress,
+              percent: patch.percent ?? task.progress.percent,
+              speed: patch.speed ?? task.progress.speed,
+              eta: patch.eta ?? task.progress.eta,
+              stage: patch.stage,
+            }
+            task.updatedAt = Date.now()
+            this.emitQueue()
+          },
+        })
+        probe = await this.inspectMedia(task.outputFile)
+        if (!probe || !isH264Codec(probe.videoCodec)) {
+          throw new YtDlpDownloadError('H.264 conversion completed but the output codec could not be verified.', true)
+        }
+      }
+      const cacheable = this.validateDownloadedOutput(task, probe)
+      this.applyActualProbe(task, probe)
+      task.outputFile = await this.relabelOutputFile(task)
 
       task.status = 'completed'
       task.progress.stage = 'hoan-tat'
       task.progress.percent = 100
       task.updatedAt = Date.now()
 
-      if (task.outputFile) {
-        this.historyStore.record(this.reuseKey(task.request), task.outputFile)
+      if (cacheable) {
+        const historyRequest = task.actualQuality
+          && this.resolveRequestedHeight(task.request.quality) !== task.actualHeight
+          ? { ...task.request, quality: task.actualQuality, variantSelector: null }
+          : task.request
+        this.historyStore.record(this.reuseKey(historyRequest), task.outputFile)
       }
     } catch (error) {
       const isAborted = (error as Error).message === 'DOWNLOAD_ABORTED'
@@ -501,6 +578,116 @@ export class DownloadManager {
       this.activeControllers.delete(task.id)
       this.emitQueueImmediate()
       this.schedule()
+    }
+  }
+
+  private resolveRequestedHeight(quality: string | undefined): number | null {
+    const match = quality?.match(/(\d{3,4})/)
+    return match ? Number(match[1]) : null
+  }
+
+  private isAudioOnly(request: DownloadRequest): boolean {
+    return request.preset === 'audioMp3' || request.preset === 'audioM4a'
+  }
+
+  private shouldEnsureH264(request: DownloadRequest): boolean {
+    const settings = this.settingsStore.get()
+    const format = request.format ?? settings.defaultFormat
+    return settings.forceH264 && format === 'mp4' && !this.isAudioOnly(request)
+  }
+
+  private applyActualProbe(
+    task: DownloadTask,
+    probe: MediaProbeResult | null,
+  ): void {
+    if (!probe) return
+    if (probe.width) task.actualWidth = probe.width
+    task.actualVideoCodec = probe.videoCodec ?? undefined
+    if (probe.qualityHeight) {
+      task.actualHeight = probe.qualityHeight
+      task.actualQuality = `${probe.qualityHeight}p`
+      const requestedHeight = this.resolveRequestedHeight(task.request.quality)
+      task.qualityFallbackUsed = Boolean(requestedHeight && probe.qualityHeight < requestedHeight)
+    }
+    if (probe.duration !== null) task.actualDuration = probe.duration
+    task.actualHasAudio = probe.hasAudio
+  }
+
+  private validateDownloadedOutput(task: DownloadTask, probe: MediaProbeResult | null): boolean {
+    if (!probe) {
+      task.validationWarning = 'unverified'
+      return false
+    }
+    if (!this.hasRequiredStreams(task.request, probe)) {
+      const missing = this.isAudioOnly(task.request) ? 'audio' : 'video'
+      throw new YtDlpDownloadError(`Downloaded file does not contain a ${missing} stream.`, true)
+    }
+    if (!this.isAudioOnly(task.request) && !probe.hasAudio) {
+      task.validationWarning = 'missing-audio'
+      return false
+    }
+    if (!this.hasAcceptableDuration(task.request, probe.duration)) {
+      task.validationWarning = 'duration-mismatch'
+      return false
+    }
+    task.validationWarning = undefined
+    return true
+  }
+
+  private hasRequiredStreams(request: DownloadRequest, probe: MediaProbeResult): boolean {
+    return this.isAudioOnly(request) ? probe.hasAudio : probe.hasVideo
+  }
+
+  private hasAcceptableDuration(request: DownloadRequest, actualDuration: number | null): boolean {
+    const expected = this.expectedDuration(request)
+    if (!expected || actualDuration === null) return true
+    const tolerance = Math.max(4, expected * 0.1)
+    return Math.abs(actualDuration - expected) <= tolerance
+  }
+
+  private expectedDuration(request: DownloadRequest): number | null {
+    const full = typeof request.duration === 'number' && request.duration > 0 ? request.duration : null
+    if (!request.trimStart?.trim() && !request.trimEnd?.trim()) return full
+
+    const start = this.parseTimestamp(request.trimStart) ?? 0
+    const end = this.parseTimestamp(request.trimEnd) ?? full
+    if (end === null || end <= start) return null
+    return end - start
+  }
+
+  private parseTimestamp(value?: string | null): number | null {
+    const trimmed = value?.trim()
+    if (!trimmed) return null
+    const parts = trimmed.split(':').map(Number)
+    if (parts.length > 3 || parts.some((part) => !Number.isFinite(part) || part < 0)) return null
+    return parts.reduce((total, part) => total * 60 + part, 0)
+  }
+
+  private async relabelOutputFile(task: DownloadTask): Promise<string> {
+    const outputFile = task.outputFile
+    const requestedHeight = this.resolveRequestedHeight(task.request.quality)
+    const actualHeight = task.actualHeight
+    if (!outputFile || !requestedHeight || !actualHeight || requestedHeight === actualHeight) {
+      return outputFile ?? ''
+    }
+
+    const parsed = path.parse(outputFile)
+    const requestedTag = new RegExp(`\\[\\s*${requestedHeight}p\\s*\\]`, 'i')
+    if (!requestedTag.test(parsed.name)) return outputFile
+
+    const nextName = parsed.name.replace(requestedTag, `[${actualHeight}p]`)
+    let nextPath = path.join(parsed.dir, `${nextName}${parsed.ext}`)
+    if (nextPath === outputFile) return outputFile
+
+    for (let suffix = 1; existsSync(nextPath); suffix++) {
+      nextPath = path.join(parsed.dir, `${nextName} (${suffix})${parsed.ext}`)
+    }
+
+    try {
+      await rename(outputFile, nextPath)
+      return nextPath
+    } catch {
+      return outputFile
     }
   }
 

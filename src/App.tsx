@@ -4,7 +4,6 @@ import type {
   AppLanguage,
   AppSettings,
   AuthMode,
-  DiagnosticsReport,
   DownloadPreset,
   DownloadStatus,
   DownloadTask,
@@ -16,9 +15,6 @@ import type {
   UpdateStatus,
   VideoMetadata,
   VideoQualityOption,
-  YtDlpAutoUpdateMode,
-  YtDlpProbe,
-  YtDlpUpdateResult,
 } from './shared/contracts'
 import { mergeImportedUrls, parseTextInput } from './lib/url-import'
 import { canonicalizeVideoKey } from './lib/video-key'
@@ -62,13 +58,11 @@ const RECOMMENDED_BATCH_QUALITY = '__recommended__'
 const SMART_PROFILES: Array<{
   id: SmartProfileId
   labelKey: 'profileBalanced' | 'profileFast' | 'profileSafe'
-  descKey: 'profileBalancedDesc' | 'profileFastDesc' | 'profileSafeDesc'
   patch: Pick<AppSettings, 'maxConcurrent' | 'maxRetries' | 'defaultFormat'>
 }> = [
   {
     id: 'balanced',
     labelKey: 'profileBalanced',
-    descKey: 'profileBalancedDesc',
     patch: {
       maxConcurrent: 2,
       maxRetries: 2,
@@ -78,7 +72,6 @@ const SMART_PROFILES: Array<{
   {
     id: 'fast',
     labelKey: 'profileFast',
-    descKey: 'profileFastDesc',
     patch: {
       maxConcurrent: 4,
       maxRetries: 1,
@@ -88,7 +81,6 @@ const SMART_PROFILES: Array<{
   {
     id: 'safe',
     labelKey: 'profileSafe',
-    descKey: 'profileSafeDesc',
     patch: {
       maxConcurrent: 1,
       maxRetries: 4,
@@ -136,7 +128,16 @@ function platformColorClass(platform: VideoMetadata['platform']): string {
 }
 
 function queueTitle(task: DownloadTask, t: Messages): string {
-  return task.request.title?.trim() || platformLabel(task.platform, t)
+  const title = task.request.title?.trim() || platformLabel(task.platform, t)
+  const requestedHeight = task.request.quality?.match(/(\d{3,4})p/i)?.[1]
+  if (!requestedHeight || !task.actualHeight || Number(requestedHeight) === task.actualHeight) {
+    return title
+  }
+
+  return title.replace(
+    new RegExp(`\\[\\s*${requestedHeight}p\\s*\\]`, 'i'),
+    `[${task.actualHeight}p]`,
+  )
 }
 
 function formatQueueError(error: string, t: Messages): string {
@@ -371,6 +372,8 @@ function formatStatusLabel(status: DownloadStatus, t: Messages, stage?: string):
   if (status === 'pending') return t.statusPending
   if (status === 'active') {
     if (stage === 'dang-ket-noi') return t.statusConnecting
+    if (stage === 'dang-thu-nguon-khac') return t.statusTryingSource
+    if (stage === 'dang-ha-chat-luong') return t.statusLoweringQuality
     if (stage === 'dang-chuyen-ma') return t.statusRecode
     if (stage === 'dang-xu-ly-audio') return t.statusAudioProcessing
     if (stage === 'sao-chep') return t.statusCopying
@@ -472,20 +475,6 @@ function buildDownloadVariantKey(input: {
   ].join('|')
 }
 
-function formatDateTime(timestamp: number | null, t: Messages): string {
-  if (!timestamp) {
-    return t.never
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(timestamp)
-}
-
 function isTerminalStatus(status: DownloadStatus): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled'
 }
@@ -530,6 +519,10 @@ interface QueueRowProps {
   error?: string
   outputFile?: string
   reused?: boolean
+  actualQuality?: string
+  requestedQuality?: string
+  qualityFallbackUsed?: boolean
+  validationWarning?: DownloadTask['validationWarning']
   title: string
   thumbnail?: string | null
   platform: DownloadTask['platform']
@@ -680,10 +673,12 @@ function TrimSlider(props: {
 // Memoized so progress ticks (every 250ms) only re-render the rows whose data
 // actually changed, not the whole queue. Props are primitives + stable callbacks.
 const QueueRow = memo(function QueueRow(props: QueueRowProps) {
-  const { id, status, stage, percent, speed, eta, error, outputFile, reused, title, thumbnail, platform, isDragging, canMoveUp, canMoveDown, showLoginHint, t } = props
+  const { id, status, stage, percent, speed, eta, error, outputFile, reused, actualQuality, requestedQuality, qualityFallbackUsed, validationWarning, title, thumbnail, platform, isDragging, canMoveUp, canMoveDown, showLoginHint, t } = props
   const terminal = isTerminalStatus(status)
   const showIndeterminateProgress = status === 'active'
     && (stage === 'dang-ket-noi'
+      || stage === 'dang-thu-nguon-khac'
+      || stage === 'dang-ha-chat-luong'
       || (percent <= 0 && (stage === 'dang-tai' || stage === 'dang-chuyen-ma')))
 
   return (
@@ -711,7 +706,29 @@ const QueueRow = memo(function QueueRow(props: QueueRowProps) {
         <div className="row-title">{title}</div>
         <div className="row-subline">
           <span className={`platform-tag ${platformColorClass(platform)}`}>{platformLabel(platform, t)}</span>
-          <span>{formatStatusLabel(status, t, stage)}</span>
+          {status === 'completed' && actualQuality ? (
+            <span className="actual-quality-badge" title={`${t.actualQuality}: ${actualQuality}`}>
+              <span aria-hidden="true">✓</span>
+              {actualQuality}
+            </span>
+          ) : (
+            <span>{formatStatusLabel(status, t, stage)}</span>
+          )}
+          {status !== 'completed' && actualQuality && (
+            <span className="speed-tag">{t.actualQuality}: {actualQuality}</span>
+          )}
+          {qualityFallbackUsed && requestedQuality && actualQuality && (
+            <span className="row-warning">{t.qualityDowngraded(requestedQuality, actualQuality)}</span>
+          )}
+          {validationWarning && (
+            <span className="row-warning">
+              {validationWarning === 'duration-mismatch'
+                ? t.durationMismatch
+                : validationWarning === 'missing-audio'
+                  ? t.missingAudio
+                  : t.outputUnverified}
+            </span>
+          )}
           {reused && <span className="reused-tag" title={t.reusedHint}>♻ {t.reusedBadge}</span>}
           {status === 'active' && !showIndeterminateProgress && (
             <span className="speed-tag">{Math.round(Math.max(0, Math.min(100, percent)))}%</span>
@@ -767,14 +784,10 @@ function App() {
   const [reloadingIds, setReloadingIds] = useState<Set<string>>(new Set())
   const [queue, setQueue] = useState<DownloadTask[]>([])
   const [settings, setSettings] = useState<AppSettings | null>(null)
-  const [probe, setProbe] = useState<YtDlpProbe | null>(null)
   const [notice, setNotice] = useState<NoticeState | null>(null)
   const [isAddingUrls, setIsAddingUrls] = useState(false)
-  const [isUpdatingYtDlp, setIsUpdatingYtDlp] = useState(false)
   const [queueControl, setQueueControl] = useState<QueueControlState>({ paused: false })
   const [draggedQueueTaskId, setDraggedQueueTaskId] = useState<string | null>(null)
-  const [diagnostics, setDiagnostics] = useState<DiagnosticsReport | null>(null)
-  const [isRunningDiagnostics, setIsRunningDiagnostics] = useState(false)
   const [authLoggedIn, setAuthLoggedIn] = useState(false)
   const [isLoggingIn, setIsLoggingIn] = useState(false)
   const [bugName, setBugName] = useState('')
@@ -820,10 +833,12 @@ function App() {
   const draggedRef = useRef<string | null>(null)
   const messagesRef = useRef(t)
   const loginHintRef = useRef<() => void>(() => undefined)
-  queueRef.current = queue
-  draggedRef.current = draggedQueueTaskId
-  messagesRef.current = t
-  loginHintRef.current = () => void openLoginSettings()
+
+  useEffect(() => {
+    queueRef.current = queue
+    draggedRef.current = draggedQueueTaskId
+    messagesRef.current = t
+  })
 
   const onRowDragStart = useCallback((event: DragEvent<HTMLElement>, id: string, status: DownloadStatus) => {
     if (isTerminalStatus(status)) return
@@ -887,6 +902,7 @@ function App() {
   const activeQueueCount = activeQueueItems.length
   const pendingQueueCount = queue.filter((task) => task.status === 'pending').length
   const completedQueueCount = queue.filter((task) => task.status === 'completed').length
+  const failedQueueCount = queue.filter((task) => task.status === 'failed').length
   const activeQueueProgress = activeQueueCount > 0
     ? Math.round(activeQueueItems.reduce((sum, task) => sum + task.progress.percent, 0) / activeQueueCount)
     : 0
@@ -899,6 +915,13 @@ function App() {
   const allStagedSelected = stagedVideos.length > 0 && stagedVideos.every((v) => selectedIds.has(v.id))
   const someStagedSelected = selectedIds.size > 0 && !allStagedSelected
   const isEmptyState = stagedVideos.length === 0 && queue.length === 0 && !isAddingUrls
+  const brandLogoState = activeQueueCount > 0
+    ? 'active'
+    : failedQueueCount > 0
+      ? 'error'
+      : completedQueueCount > 0
+        ? 'success'
+        : 'idle'
 
   // Auto-clear notice after a delay
   useEffect(() => {
@@ -954,22 +977,37 @@ function App() {
     }
   }, [])
 
-  // Poll server latency while the Settings panel is open (and stop when closed).
+  // Keep the compact status-bar network indicator current.
   useEffect(() => {
-    if (!hasBridge || !isSettingsVisible) return
+    if (!hasBridge) return
 
     let cancelled = false
+    let timer: ReturnType<typeof setInterval> | null = null
     const ping = async () => {
+      if (!navigator.onLine) {
+        if (!cancelled) setServerPing({ ok: false, latencyMs: -1 })
+        return
+      }
       const result = await window.electronAPI.pingNetwork()
       if (!cancelled) setServerPing(result)
     }
-    void ping()
-    const timer = setInterval(() => void ping(), 5000)
+    const updatePolling = () => {
+      if (timer) {
+        clearInterval(timer)
+        timer = null
+      }
+      if (document.hidden) return
+      void ping()
+      timer = setInterval(() => void ping(), 30000)
+    }
+    document.addEventListener('visibilitychange', updatePolling)
+    updatePolling()
     return () => {
       cancelled = true
-      clearInterval(timer)
+      document.removeEventListener('visibilitychange', updatePolling)
+      if (timer) clearInterval(timer)
     }
-  }, [hasBridge, isSettingsVisible])
+  }, [hasBridge])
 
   const [showKeyboardShortcuts, setShowKeyboardShortcuts] = useState(false)
   const [isMaximized, setIsMaximized] = useState(false)
@@ -981,10 +1019,13 @@ function App() {
   useEffect(() => {
     if (!hasBridge) return
 
-    window.electronAPI.getSettings().then(setSettings)
+    window.electronAPI.getSettings().then((loadedSettings) => {
+      setSettings(loadedSettings)
+      setBugName(loadedSettings.userName ?? '')
+      setBugEmail(loadedSettings.userEmail ?? '')
+    })
     window.electronAPI.listDownloads().then(setQueue)
     window.electronAPI.getDownloadControlState().then(setQueueControl)
-    window.electronAPI.probeYtDlp().then(setProbe)
     window.electronAPI.getAuthStatus().then(setAuthLoggedIn)
     const offUpdate = window.electronAPI.onUpdateStatus(setUpdateStatus)
 
@@ -1046,11 +1087,6 @@ function App() {
     el.style.height = 'auto'
     el.style.height = `${el.scrollHeight}px`
   }, [showManualInput, urlInput])
-
-  useEffect(() => {
-    setBugName(settings?.userName ?? '')
-    setBugEmail(settings?.userEmail ?? '')
-  }, [settings?.userName, settings?.userEmail])
 
   // Forward renderer crashes to the error reporter.
   useEffect(() => {
@@ -1564,28 +1600,6 @@ function App() {
     }
   }
 
-  async function onUpdateYtDlp(): Promise<void> {
-    if (!hasBridge || isUpdatingYtDlp) return
-
-    setIsUpdatingYtDlp(true)
-    try {
-      const result: YtDlpUpdateResult = await window.electronAPI.updateYtDlp()
-      const nextProbe = await window.electronAPI.probeYtDlp()
-      setProbe(nextProbe)
-      setNotice({
-        tone: result.ok ? 'success' : 'error',
-        message: result.version ? `${result.message} (${result.version})` : result.message,
-      })
-    } catch (error) {
-      setNotice({
-        tone: 'error',
-        message: t.updateYtDlpFailed(formatQueueError(error instanceof Error ? error.message : String(error), t)),
-      })
-    } finally {
-      setIsUpdatingYtDlp(false)
-    }
-  }
-
   async function toggleQueuePause(): Promise<void> {
     if (!hasBridge) {
       return
@@ -1600,32 +1614,6 @@ function App() {
       tone: 'info',
       message: nextState.paused ? t.queuePaused : t.queueResumed,
     })
-  }
-
-  async function onRunDiagnostics(): Promise<void> {
-    if (!hasBridge || isRunningDiagnostics) {
-      return
-    }
-
-    setIsRunningDiagnostics(true)
-    try {
-      const report = await window.electronAPI.runDiagnostics()
-      setDiagnostics(report)
-      const allGood = [report.ytDlp.ok, report.ffmpeg.ok, report.node.ok, report.network.ok]
-        .every(Boolean)
-
-      setNotice({
-        tone: allGood ? 'success' : 'info',
-        message: allGood ? t.diagnosticsNoIssues : t.diagnosticsFoundIssues,
-      })
-    } catch (error) {
-      setNotice({
-        tone: 'error',
-        message: t.diagnosticsFailed(formatQueueError(error instanceof Error ? error.message : String(error), t)),
-      })
-    } finally {
-      setIsRunningDiagnostics(false)
-    }
   }
 
   async function onOpenLogin(): Promise<void> {
@@ -1695,15 +1683,18 @@ function App() {
     }
   }
 
-  startDownloadShortcutRef.current = () => {
-    void startDownload()
-  }
-  handlePasteAddShortcutRef.current = () => {
-    void handlePasteAdd()
-  }
-  toggleSettingsShortcutRef.current = () => {
-    void toggleSettingsPanel()
-  }
+  useEffect(() => {
+    loginHintRef.current = () => void openLoginSettings()
+    startDownloadShortcutRef.current = () => {
+      void startDownload()
+    }
+    handlePasteAddShortcutRef.current = () => {
+      void handlePasteAdd()
+    }
+    toggleSettingsShortcutRef.current = () => {
+      void toggleSettingsPanel()
+    }
+  })
 
   function getReorderTargetId(taskId: string, direction: 'up' | 'down'): string | null {
     return computeReorderTarget(queue, taskId, direction)
@@ -1714,6 +1705,7 @@ function App() {
       <div className={`app-window ${isEmptyState ? 'is-empty' : ''}`}>
         <header className="window-titlebar">
           <div className="window-title">
+            <img className={`brand-logo state-${brandLogoState}`} src="./flash-logo.png" alt="" />
             <span className="brand-stack">
               <strong className="brand-name">
                 <span className="brand-goda">FLASH</span>
@@ -1721,36 +1713,34 @@ function App() {
               </strong>
               <span className="brand-version">v{__APP_VERSION__}</span>
             </span>
-            <span className="brand-divider" aria-hidden="true" />
-            <span className="brand-tagline">{t.tagline}</span>
           </div>
           <div className="titlebar-right">
             <div className="titlebar-actions">
             <button
-              className="toolbar-button"
+              className="titlebar-icon-button"
               type="button"
               onClick={() => void toggleSettingsPanel()}
               disabled={!settings}
               title={t.openSettings}
-              style={{ minHeight: '32px', padding: '0 12px', fontSize: '1.1rem' }}
+              aria-label={t.openSettings}
             >
               <span className="animated-icon">⚙</span>
             </button>
             <button
-              className="toolbar-button"
+              className="titlebar-icon-button"
               type="button"
               onClick={toggleKeyboardShortcuts}
               title={t.shortcutsTitle}
-              style={{ minHeight: '32px', padding: '0 12px', fontSize: '1rem', fontWeight: 700 }}
+              aria-label={t.shortcutsTitle}
             >
               ?
             </button>
             <button
-              className="toolbar-button"
+              className="titlebar-icon-button"
               type="button"
               onClick={toggleTheme}
               title={theme === 'light' ? t.switchToDark : t.switchToLight}
-              style={{ minHeight: '32px', padding: '0 12px', fontSize: '1.1rem' }}
+              aria-label={theme === 'light' ? t.switchToDark : t.switchToLight}
             >
               {theme === 'light' ? '🌙' : '☀️'}
             </button>
@@ -1839,12 +1829,12 @@ function App() {
           )}
           <div className="toolbar-right">
             <label className="format-control">
-              <span>{t.format}</span>
               <select
                 value={settings?.defaultFormat ?? 'mp4'}
                 onChange={(event) => void updateSettings({ defaultFormat: event.target.value as OutputFormat })}
                 disabled={!settings}
                 title={t.defaultVideoFormat}
+                aria-label={t.defaultVideoFormat}
               >
                 {FORMAT_OPTIONS.map((format) => (
                   <option key={format.value} value={format.value}>{format.label}</option>
@@ -1901,7 +1891,7 @@ function App() {
             <div className="desktop-empty">
               <div className="empty-hero">
                 <div className="empty-logo">
-                  <img src="./icon.png" alt="FLASH MEDIA" />
+                  <img className="brand-logo-hero" src="./flash-logo.png" alt="FLASH MEDIA" />
                 </div>
                 <h2 className="empty-title">{t.readyToDownload}</h2>
                 <p className="empty-subtitle">{t.emptySubtitle}</p>
@@ -2105,6 +2095,10 @@ function App() {
                 error={task.error}
                 outputFile={task.outputFile}
                 reused={task.reused}
+                actualQuality={task.actualQuality}
+                requestedQuality={task.request.quality}
+                qualityFallbackUsed={task.qualityFallbackUsed}
+                validationWarning={task.validationWarning}
                 title={queueTitle(task, t)}
                 thumbnail={task.request.thumbnail}
                 platform={task.platform}
@@ -2179,7 +2173,17 @@ function App() {
                 <span>{activeQueueProgress}%</span>
               </span>
             )}
-            <span>{queueControl.paused ? t.paused : activeQueueCount > 0 ? t.downloadingStatus : t.ready}</span>
+            {(queueControl.paused || activeQueueCount > 0) && (
+              <span>{queueControl.paused ? t.paused : t.downloadingStatus}</span>
+            )}
+            <span
+              className={`status-network ${isOnline && serverPing?.ok ? 'online' : 'offline'}`}
+              title={isOnline && serverPing?.ok ? `${t.networkOnline} · ${serverPing.latencyMs} ms` : t.networkOffline}
+              aria-label={isOnline && serverPing?.ok ? `${t.networkOnline}, ${serverPing.latencyMs} ms` : t.networkOffline}
+            >
+              <span className="status-network-dot" aria-hidden="true" />
+              <span>{serverPing?.ok ? `${serverPing.latencyMs} ms` : '-- ms'}</span>
+            </span>
           </div>
         </footer>
 
@@ -2194,12 +2198,9 @@ function App() {
               onClick={(event) => event.stopPropagation()}
             >
               <div className="settings-modal-head">
-                <div className="section-header-copy">
-                  <h2>{t.settings}</h2>
-                  <span>{t.settingsSubtitle}</span>
-                </div>
-                <button className="ghost-button" type="button" onClick={() => void closeSettingsPanel()}>
-                  {t.close}
+                <div className="section-header-copy"><h2>{t.settings}</h2></div>
+                <button className="modal-close-button" type="button" onClick={() => void closeSettingsPanel()} title={t.close} aria-label={t.close}>
+                  ×
                 </button>
               </div>
 
@@ -2281,14 +2282,15 @@ function App() {
                     onClick={() => void applySmartProfile(profile.id)}
                     disabled={!settings}
                   >
-                    <strong>{t[profile.labelKey]}</strong>
-                    <span>{t[profile.descKey]}</span>
-                    {smartProfileMatchesSettings(profile, settings) && <small>{t.inUse}</small>}
+                    <strong>
+                      {t[profile.labelKey]}
+                      {smartProfileMatchesSettings(profile, settings) && <span className="profile-check">✓</span>}
+                    </strong>
                   </button>
                 ))}
               </div>
 
-              <div className="settings-auto-row">
+              <div className="settings-option-grid">
                 <label className="switch-line">
                   <input
                     className="switch-input"
@@ -2302,11 +2304,8 @@ function App() {
                   </span>
                   <span className="switch-text">{t.forceH264}</span>
                 </label>
-                <small>{t.forceH264Note}</small>
-              </div>
 
-              <div className="settings-auto-row">
-                <label className="field field-inline">
+                <label className="field setting-select-control">
                   <span className="switch-text">{t.recodeEncoderLabel}</span>
                   <select
                     value={settings?.recodeEncoder ?? 'auto'}
@@ -2320,10 +2319,7 @@ function App() {
                     <option value="cpu">{t.recodeCpu}</option>
                   </select>
                 </label>
-                <small>{t.recodeEncoderNote}</small>
-              </div>
 
-              <div className="settings-auto-row">
                 <label className="switch-line">
                   <input
                     className="switch-input"
@@ -2337,10 +2333,7 @@ function App() {
                   </span>
                   <span className="switch-text">{t.embedMetadata}</span>
                 </label>
-                <small>{t.embedMetadataNote}</small>
-              </div>
 
-              <div className="settings-auto-row">
                 <label className="switch-line">
                   <input
                     className="switch-input"
@@ -2354,7 +2347,6 @@ function App() {
                   </span>
                   <span className="switch-text">{t.reuseDownloadedFiles}</span>
                 </label>
-                <small>{t.reuseDownloadedFilesNote}</small>
               </div>
 
               <div className="settings-section-label">{t.outputFolder}</div>
@@ -2387,14 +2379,11 @@ function App() {
                     <option value="auto">{t.authModeAuto}</option>
                     <option value="cookies">{t.authModeCookies}</option>
                   </select>
-                  <small>{t.authModeNote}</small>
                 </label>
 
                 {authLoggedIn ? (
                   <div className="auth-method">
-                    <div className="auth-method-text">
-                      <span>{t.loggedInNote}</span>
-                    </div>
+                    <strong>{t.loggedIn}</strong>
                     <button className="secondary-button" type="button" onClick={() => void onLogout()}>
                       {t.logout}
                     </button>
@@ -2404,7 +2393,6 @@ function App() {
                     <div className="auth-method">
                       <div className="auth-method-text">
                         <strong>{t.methodBrowserTitle}</strong>
-                        <span>{t.methodBrowserDesc}</span>
                       </div>
                       <button
                         className="primary-button"
@@ -2419,7 +2407,6 @@ function App() {
                     <div className="auth-method">
                       <div className="auth-method-text">
                         <strong>{t.methodFileTitle}</strong>
-                        <span>{t.methodFileDesc}</span>
                         <button
                           className="link-button"
                           type="button"
@@ -2441,137 +2428,11 @@ function App() {
                 )}
               </div>
 
-              <div className="settings-section-label">{t.secTools}</div>
-
-              <div className="settings-health-row">
-                <div className="tool-pill settings-tool-pill">
-                  <span>yt-dlp</span>
-                  <strong className={probe?.available ? 'state-ready' : 'state-error'}>
-                    {probe?.available ? t.ytDlpReady : t.offline}
-                  </strong>
-                  <small>{probe?.version ?? t.notDetected}</small>
-                </div>
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => void onUpdateYtDlp()}
-                  disabled={isUpdatingYtDlp}
-                >
-                  {isUpdatingYtDlp ? t.updating : t.updateYtDlp}
-                </button>
-              </div>
-
-              <div className="conn-card">
-                <div className="conn-row">
-                  <span className="conn-label">{t.networkLabelStatus}</span>
-                  <span className={`conn-value ${isOnline ? 'on' : 'off'}`}>
-                    <span className="conn-dot" />
-                    {isOnline ? t.networkOnline : t.networkOffline}
-                  </span>
-                </div>
-                <div className="conn-row">
-                  <span className="conn-label">{t.serverLabel}</span>
-                  <span
-                    className={`conn-value ${
-                      !isOnline || !serverPing?.ok
-                        ? 'off'
-                        : serverPing.latencyMs < 200
-                          ? 'on'
-                          : serverPing.latencyMs < 500
-                            ? 'mid'
-                            : 'off'
-                    }`}
-                  >
-                    <span className="conn-dot" />
-                    {!isOnline || (serverPing && !serverPing.ok)
-                      ? t.serverDown
-                      : serverPing
-                        ? `${serverPing.latencyMs < 200 ? t.serverGood : serverPing.latencyMs < 500 ? t.serverSlow : t.serverVerySlow} · ${serverPing.latencyMs}ms`
-                        : t.serverChecking}
-                  </span>
-                </div>
-              </div>
-
-              <div className="settings-auto-row">
-                <label className="switch-line">
-                  <input
-                    className="switch-input"
-                    type="checkbox"
-                    checked={settings?.autoUpdateYtDlp ?? false}
-                    onChange={(event) =>
-                      void updateSettings({ autoUpdateYtDlp: event.target.checked })
-                    }
-                    disabled={!settings}
-                  />
-                  <span className="switch-track" aria-hidden="true">
-                    <span className="switch-thumb" />
-                  </span>
-                  <span className="switch-text">{t.autoUpdateYtDlp}</span>
-                </label>
-
-                <label className="field compact-field">
-                  <span>{t.updateSchedule}</span>
-                  <select
-                    value={settings?.ytDlpAutoUpdateMode ?? 'weekly'}
-                    onChange={(event) =>
-                      void updateSettings({ ytDlpAutoUpdateMode: event.target.value as YtDlpAutoUpdateMode })
-                    }
-                    disabled={!settings || !settings.autoUpdateYtDlp}
-                  >
-                    <option value="weekly">{t.weekly}</option>
-                    <option value="on-start">{t.onStart}</option>
-                  </select>
-                </label>
-
-                <small>{t.lastAutoUpdate(formatDateTime(settings?.lastYtDlpAutoUpdateAt ?? null, t))}</small>
-              </div>
-
-              <div className="diagnostics-panel">
-                <div className="diagnostics-head">
-                  <div>
-                    <strong>{t.diagnostics}</strong>
-                    <p>{t.diagnosticsSubtitle}</p>
-                  </div>
-                  <button
-                    className="secondary-button compact-button"
-                    type="button"
-                    onClick={() => void onRunDiagnostics()}
-                    disabled={isRunningDiagnostics}
-                  >
-                    {isRunningDiagnostics ? t.running : t.runDiagnostics}
-                  </button>
-                </div>
-
-                {diagnostics && (
-                  <ul className="diagnostics-list">
-                    <li className={diagnostics.ytDlp.ok ? 'state-ready' : 'state-error'}>
-                      <span>yt-dlp</span>
-                      <small>{diagnostics.ytDlp.message}</small>
-                    </li>
-                    <li className={diagnostics.ffmpeg.ok ? 'state-ready' : 'state-error'}>
-                      <span>ffmpeg</span>
-                      <small>{diagnostics.ffmpeg.message}</small>
-                    </li>
-                    <li className={diagnostics.node.ok ? 'state-ready' : 'state-error'}>
-                      <span>{t.nodeLabel}</span>
-                      <small>{diagnostics.node.message}</small>
-                    </li>
-                    <li className={diagnostics.network.ok ? 'state-ready' : 'state-error'}>
-                      <span>{t.networkLabel}</span>
-                      <small>{diagnostics.network.message}</small>
-                    </li>
-                    <li>
-                      <span>{t.generatedAt}</span>
-                      <small>{formatDateTime(diagnostics.generatedAt, t)}</small>
-                    </li>
-                  </ul>
-                )}
-              </div>
-
               <div className="settings-section-label">{t.secReport}</div>
 
+              <p className="bug-report-desc">{t.telemetryDisclosure}</p>
+
               <div className="bug-report">
-                <p className="bug-report-desc">{t.reportBugDesc}</p>
                 <div className="bug-report-row">
                   <label className="field">
                     <span>{t.yourName}</span>
@@ -2627,12 +2488,9 @@ function App() {
         <div className="settings-overlay" onClick={toggleKeyboardShortcuts}>
           <div className="panel settings-modal" style={{ maxWidth: '600px' }} onClick={(e) => e.stopPropagation()}>
             <div className="settings-modal-head">
-              <div className="section-header-copy">
-                <h2>{t.shortcutsModalTitle}</h2>
-                <span>{t.shortcutsSubtitle}</span>
-              </div>
-              <button className="ghost-button" type="button" onClick={toggleKeyboardShortcuts}>
-                {t.close}
+              <div className="section-header-copy"><h2>{t.shortcutsModalTitle}</h2></div>
+              <button className="modal-close-button" type="button" onClick={toggleKeyboardShortcuts} title={t.close} aria-label={t.close}>
+                ×
               </button>
             </div>
 

@@ -164,6 +164,32 @@ button {
   50% { transform: translateY(-3px); }
 }
 
+@keyframes logo-breathe {
+  0%, 100% { transform: translateY(0) scale(1); filter: drop-shadow(0 0 2px rgba(117, 76, 255, 0.25)); }
+  50% { transform: translateY(-1px) scale(1.035); filter: drop-shadow(0 0 5px rgba(87, 111, 255, 0.48)); }
+}
+
+@keyframes logo-charge {
+  0%, 100% { transform: translateY(0) scale(1); filter: drop-shadow(0 0 3px rgba(141, 62, 255, 0.45)); }
+  45% { transform: translateY(-2px) scale(1.09); filter: drop-shadow(0 0 7px rgba(52, 142, 255, 0.75)); }
+}
+
+@keyframes logo-success {
+  0%, 100% { transform: scale(1); filter: none; }
+  45% { transform: scale(1.13); filter: drop-shadow(0 0 7px rgba(72, 187, 120, 0.82)); }
+}
+
+@keyframes logo-error {
+  0%, 100% { transform: translateX(0); filter: none; }
+  25% { transform: translateX(-2px); filter: drop-shadow(0 0 4px rgba(252, 129, 129, 0.72)); }
+  75% { transform: translateX(2px); filter: drop-shadow(0 0 4px rgba(252, 129, 129, 0.72)); }
+}
+
+@keyframes logo-hero-float {
+  0%, 100% { transform: translateY(0) rotate(-1deg); }
+  50% { transform: translateY(-4px) rotate(1deg); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
@@ -237,8 +263,8 @@ button {
    Title Bar
    ============================================ */
 .window-titlebar {
-  min-height: 52px;
-  padding: 0 0 0 20px;
+  min-height: 48px;
+  padding: 0 0 0 18px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -257,8 +283,8 @@ button {
 .window-controls {
   display: flex;
   align-items: stretch;
-  height: 52px;
-  margin-left: 12px;
+  height: 48px;
+  margin-left: 8px;
 }
 
 .win-control {
@@ -297,28 +323,54 @@ button {
 .window-title {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+}
+
+.brand-logo {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  object-fit: contain;
+  pointer-events: none;
+  scale: 1.6;
+  transform-origin: 50% 55%;
+}
+
+.brand-logo.state-idle {
+  animation: logo-breathe 3.2s var(--ease) infinite;
+}
+
+.brand-logo.state-active {
+  animation: logo-charge 0.95s var(--ease) infinite;
+}
+
+.brand-logo.state-success {
+  animation: logo-success 1.15s var(--ease) 1;
+}
+
+.brand-logo.state-error {
+  animation: logo-error 0.48s var(--ease) 2;
 }
 
 .brand-stack {
   display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-  line-height: 1.05;
+  align-items: baseline;
+  gap: 7px;
+  line-height: 1;
 }
 
 .brand-name {
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
-  font-size: 1.2rem;
+  font-size: 1.08rem;
   font-weight: 800;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .brand-version {
   color: var(--muted);
-  font-size: 0.58rem;
+  font-size: 0.6rem;
   font-weight: 600;
   letter-spacing: 0.08em;
 }
@@ -335,26 +387,6 @@ button {
   font-weight: 700;
 }
 
-.window-subtitle {
-  color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 500;
-}
-
-.brand-divider {
-  width: 1px;
-  height: 18px;
-  background: var(--line-strong);
-}
-
-.brand-tagline {
-  color: var(--muted);
-  font-size: 0.62rem;
-  font-weight: 600;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
 .titlebar-right {
   display: flex;
   align-items: center;
@@ -365,6 +397,58 @@ button {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.status-network {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.status-network-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--error);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--error) 70%, transparent);
+}
+
+.status-network.online .status-network-dot {
+  background: var(--success);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--success) 72%, transparent);
+}
+
+.titlebar-icon-button,
+.modal-close-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-grid;
+  place-items: center;
+  line-height: 1;
+  font-size: 1rem;
+  font-weight: 700;
+  transition: color 150ms var(--ease), background 150ms var(--ease), border-color 150ms var(--ease);
+}
+
+.titlebar-icon-button:hover,
+.modal-close-button:hover {
+  color: var(--text);
+  background: var(--surface-muted);
+  border-color: var(--line);
+}
+
+.titlebar-icon-button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* ============================================
@@ -1010,6 +1094,13 @@ select option {
   font-size: 0.75rem;
 }
 
+.row-warning {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+
 .video-status-badge {
   display: inline-flex;
   align-items: center;
@@ -1306,6 +1397,25 @@ select option {
   gap: 10px;
 }
 
+.settings-option-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.setting-select-control {
+  min-height: 56px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+
+.setting-select-control select {
+  width: 100%;
+  min-height: 30px;
+}
+
 .settings-auto-row {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   align-items: end;
@@ -1367,18 +1477,6 @@ select option {
   color: var(--text);
   font-weight: 620;
   font-size: 0.85rem;
-}
-
-.settings-auto-row > small {
-  min-height: 56px;
-  display: flex;
-  align-items: center;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface-soft);
-  color: var(--muted);
-  font-size: 0.78rem;
 }
 
 .field {
@@ -1804,9 +1902,10 @@ select option {
   background: var(--surface-soft);
   color: var(--text);
   text-align: left;
-  padding: 12px;
-  display: grid;
-  gap: 4px;
+  min-height: 48px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
   cursor: pointer;
   transition: all 0.2s var(--ease);
 }
@@ -1822,18 +1921,18 @@ select option {
 }
 
 .smart-profile strong {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   font-size: 0.88rem;
 }
 
-.smart-profile span {
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
-.smart-profile small {
+.smart-profile .profile-check {
   color: var(--accent);
-  font-size: 0.72rem;
-  font-weight: 600;
+  font-size: 0.9rem;
+  font-weight: 800;
 }
 
 /* Diagnostics */
@@ -2089,12 +2188,6 @@ select option {
     padding: 0 0 0 14px;
   }
 
-  .window-subtitle,
-  .brand-divider,
-  .brand-tagline {
-    display: none;
-  }
-
   .desktop-toolbar {
     flex-wrap: wrap;
     padding: 10px 14px;
@@ -2135,6 +2228,7 @@ select option {
   }
 
   .settings-auto-row,
+  .settings-option-grid,
   .settings-grid,
   .smart-profile-grid,
   .settings-health-row,
@@ -2142,7 +2236,6 @@ select option {
     grid-template-columns: 1fr;
   }
 
-  .settings-auto-row > small,
   .switch-line {
     min-height: 0;
   }
@@ -2211,16 +2304,32 @@ select option {
 }
 
 .empty-logo {
-  width: 64px;
-  height: 64px;
+  width: 72px;
+  height: 72px;
   margin: 0 auto 18px;
-  opacity: 0.95;
+  position: relative;
 }
 
 .empty-logo img {
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+.empty-logo::before {
+  content: '';
+  position: absolute;
+  inset: 7px;
+  z-index: -1;
+  background: url('/flash-logo.png') center / contain no-repeat;
+  opacity: 0.26;
+  filter: blur(10px);
+  transform: translateY(7px) scale(0.92);
+}
+
+.brand-logo-hero {
+  animation: logo-hero-float 3.4s var(--ease) infinite;
+  filter: drop-shadow(0 8px 12px rgba(62, 66, 172, 0.24));
 }
 
 .empty-title {
@@ -2348,6 +2457,25 @@ select option {
   color: var(--accent);
   font-weight: 600;
   font-size: 0.72rem;
+}
+
+.actual-quality-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--success) 42%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+  color: var(--success);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.actual-quality-badge > span {
+  font-size: 0.68rem;
 }
 
 .reused-tag {

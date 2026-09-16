@@ -1,12 +1,26 @@
 import { app } from 'electron'
 import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { request as httpsRequest } from 'node:https'
-import { arch, hostname, release } from 'node:os'
+import { arch, hostname, networkInterfaces, release, userInfo } from 'node:os'
+import path from 'node:path'
 import type { AppSettings } from '../types.js'
 
 interface TelegramConfig {
   botToken: string
   chatId: string
+}
+
+function getPackagedTelegramConfig(): TelegramConfig | null {
+  try {
+    const configPath = path.join(__dirname, 'telemetry-config.json')
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as Partial<TelegramConfig>
+    const botToken = parsed.botToken?.trim()
+    const chatId = parsed.chatId?.trim()
+    return botToken && chatId ? { botToken, chatId } : null
+  } catch {
+    return null
+  }
 }
 
 // Desktop binaries are public and cannot safely contain a Telegram bot secret.
@@ -17,17 +31,19 @@ function getTelegramConfig(): TelegramConfig | null {
   const botToken = process.env.FLASH_MEDIA_TELEGRAM_BOT_TOKEN?.trim()
   const chatId = process.env.FLASH_MEDIA_TELEGRAM_CHAT_ID?.trim()
 
-  if (!botToken || !chatId) {
-    return null
+  if (botToken && chatId) {
+    return { botToken, chatId }
   }
 
-  return { botToken, chatId }
+  return getPackagedTelegramConfig()
 }
 
 // Persistent "already pinged" marker in HKCU. This survives an %APPDATA% wipe or
 // reinstall, so each machine notifies Telegram only once.
 const REG_KEY = 'HKCU\\Software\\FLASH MEDIA'
-const REG_VALUE = 'InstallPinged'
+// V2 adds install ID, Windows account and network addresses. A separate marker
+// lets existing installations submit the richer report exactly once after update.
+const REG_VALUE = 'InstallPingedV2'
 
 function isConfigured(): boolean {
   return Boolean(getTelegramConfig())
@@ -97,6 +113,54 @@ function writeRegistryMarker(value: string): void {
   }
 }
 
+function getLocalIpAddresses(): string {
+  const addresses: string[] = []
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family === 'IPv4' && !entry.internal) addresses.push(entry.address)
+    }
+  }
+  return [...new Set(addresses)].join(', ') || '-'
+}
+
+function getWindowsUserName(): string {
+  try {
+    return userInfo().username || '-'
+  } catch {
+    return process.env.USERNAME?.trim() || '-'
+  }
+}
+
+async function getPublicIpAddress(): Promise<string> {
+  return new Promise((resolve) => {
+    const req = httpsRequest(
+      {
+        hostname: 'api.ipify.org',
+        path: '/?format=json',
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      },
+      (res) => {
+        let body = ''
+        res.on('data', (chunk: Buffer) => {
+          if (body.length < 4096) body += chunk.toString('utf8')
+        })
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(body) as { ip?: unknown }
+            resolve(typeof parsed.ip === 'string' ? parsed.ip : '-')
+          } catch {
+            resolve('-')
+          }
+        })
+      },
+    )
+    req.setTimeout(4000, () => req.destroy())
+    req.on('error', () => resolve('-'))
+    req.end()
+  })
+}
+
 // Sent once per machine (guarded by a persistent registry marker).
 export function sendInstallTelemetry(settings: AppSettings): boolean {
   if (!settings.telemetryEnabled || !isConfigured()) {
@@ -110,20 +174,23 @@ export function sendInstallTelemetry(settings: AppSettings): boolean {
   const installDate = new Date().toISOString().slice(0, 10)
   const machine = hostname()
 
-  const lines = [
-    '🟢 FLASH MEDIA cài đặt',
-    `machine: ${machine}`,
-    `app: ${app.getVersion()}`,
-    `os: Windows ${release()} (${arch()})`,
-    `date: ${installDate}`,
-  ]
-  const name = settings.userName?.trim()
-  if (name) {
-    lines.push(`user: ${name}`)
-  }
+  void getPublicIpAddress().then((publicIp) => {
+    const lines = [
+      '🟢 FLASH MEDIA cài đặt',
+      `install_id: ${settings.telemetryInstallId || '-'}`,
+      `machine: ${machine}`,
+      `windows_user: ${getWindowsUserName()}`,
+      `app: ${app.getVersion()}`,
+      `os: Windows ${release()} (${arch()})`,
+      `local_ip: ${getLocalIpAddresses()}`,
+      `public_ip: ${publicIp}`,
+      `date: ${installDate}`,
+      `user: ${settings.userName?.trim() || '-'}`,
+    ]
 
-  // Mark as sent only after Telegram confirms so an offline first launch retries.
-  sendTelegram(lines.join('\n'), () => writeRegistryMarker(`${installDate}|${machine}`))
+    // Mark only after Telegram confirms so an offline first launch retries.
+    sendTelegram(lines.join('\n'), () => writeRegistryMarker(`${installDate}|${machine}`))
+  })
   return true
 }
 

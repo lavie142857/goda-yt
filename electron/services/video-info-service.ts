@@ -11,6 +11,7 @@ import { pushJsRuntimeArgs, resolveYtDlpPath } from './binaries.js'
 import type { CookiesHandle } from './auth-store.js'
 import { detectPlatform } from './platform.js'
 import { getSessionTikTokDeviceId } from './tiktok-device.js'
+import { ytDlpOperationGate } from './yt-dlp-gate.js'
 
 interface YtDlpFormat {
   acodec?: string
@@ -287,7 +288,7 @@ export class VideoInfoService {
     tiktokProfile: TikTokExtractorProfile = 'web',
     youtubeProfile: YouTubeExtractorProfile = 'default',
   ): Promise<ProbeResult> {
-    return new Promise((resolve) => {
+    return ytDlpOperationGate.runOperation(() => new Promise((resolve) => {
       const executable = resolveYtDlpPath()
       // In public mode, never attach stored/browser cookies. Stale cookies are a
       // common source of false YouTube failures for otherwise public videos.
@@ -422,7 +423,7 @@ export class VideoInfoService {
           })
         }
       })
-    })
+    }))
   }
 
   private async probeViaYtDlpWithRetries(

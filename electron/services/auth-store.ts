@@ -86,7 +86,14 @@ export class AuthStore {
       try {
         return safeStorage.decryptString(readFileSync(this.encPath))
       } catch {
-        return null
+        // DPAPI blobs can become unreadable after a Windows/profile migration.
+        // Remove the unusable blob so a new login/import can recover cleanly,
+        // then still check the legacy file as a last-resort fallback.
+        try {
+          unlinkSync(this.encPath)
+        } catch {
+          // ignore cleanup failure; report no usable cookies below
+        }
       }
     }
 

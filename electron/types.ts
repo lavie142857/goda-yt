@@ -84,6 +84,14 @@ export interface DownloadTask {
   error?: string
   outputFile?: string
   reused?: boolean
+  actualQuality?: string
+  actualWidth?: number
+  actualHeight?: number
+  actualDuration?: number
+  actualHasAudio?: boolean
+  actualVideoCodec?: string
+  qualityFallbackUsed?: boolean
+  validationWarning?: 'unverified' | 'duration-mismatch' | 'missing-audio'
   createdAt: number
   updatedAt: number
   progress: DownloadProgress
