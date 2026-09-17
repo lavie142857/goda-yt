@@ -416,7 +416,7 @@ export class YtDlpService {
           : 'default'
 
       try {
-        const baseProfile = this.getDefaultTikTokExtractorProfile(platform)
+        const baseProfile = this.getDefaultTikTokExtractorProfile()
         await runWithArgs(this.buildArgs(
           request,
           options.settings,
@@ -471,7 +471,7 @@ export class YtDlpService {
                   qualityFallback,
                   platform,
                   authAttempt,
-                  tiktokProfile: this.getDefaultTikTokExtractorProfile(platform),
+                  tiktokProfile: this.getDefaultTikTokExtractorProfile(),
                   youtubeProfile: fallbackProfiles[attempt],
                   recodeArgs: recodePlan?.args,
                 },
@@ -499,7 +499,7 @@ export class YtDlpService {
                 qualityFallback,
                 platform,
                 authAttempt,
-                tiktokProfile: this.getDefaultTikTokExtractorProfile(platform),
+                tiktokProfile: this.getDefaultTikTokExtractorProfile(),
                 recodeArgs: CPU_H264_RECODE_ARGS,
               },
               cookiesPath,
@@ -520,7 +520,7 @@ export class YtDlpService {
                 qualityFallback,
                 platform,
                 authAttempt,
-                tiktokProfile: this.getDefaultTikTokExtractorProfile(platform),
+                tiktokProfile: this.getDefaultTikTokExtractorProfile(),
               },
               cookiesPath,
             ))
@@ -1004,8 +1004,8 @@ export class YtDlpService {
     this.pushContainerArgs(args, requestedFormat)
   }
 
-  private getDefaultTikTokExtractorProfile(platform: DownloadPlatform | null): TikTokExtractorProfile {
-    return platform === 'tiktok' ? 'app-api' : 'web'
+  private getDefaultTikTokExtractorProfile(): TikTokExtractorProfile {
+    return 'web'
   }
 
   private pushTikTokExtractorArgs(

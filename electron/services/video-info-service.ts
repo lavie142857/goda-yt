@@ -441,7 +441,7 @@ export class VideoInfoService {
       youtube: YouTubeExtractorProfile
     }> = platform === 'tiktok'
       ? [
-          { tiktok: 'app-api', youtube: 'default' },
+          { tiktok: 'web', youtube: 'default' },
           { tiktok: 'app-api', youtube: 'default' },
           { tiktok: 'web', youtube: 'default' },
           { tiktok: 'app-api', youtube: 'default' },

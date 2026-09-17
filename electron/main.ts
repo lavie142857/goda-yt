@@ -177,13 +177,13 @@ function shouldRunAutoUpdate(lastSuccessfulUpdateAt: number | null): boolean {
   return Date.now() - lastSuccessfulUpdateAt >= oneDayMs
 }
 
-async function runScheduledAutoUpdate(): Promise<void> {
+async function runScheduledAutoUpdate(force = false): Promise<void> {
   if (autoUpdateRunning) {
     return
   }
 
   const settings = settingsStore.get()
-  if (!shouldRunAutoUpdate(settings.lastYtDlpAutoUpdateAt)) {
+  if (!force && !shouldRunAutoUpdate(settings.lastYtDlpAutoUpdateAt)) {
     return
   }
 
@@ -751,7 +751,13 @@ if (isSecondInstance) {
     registerIpcHandlers()
     createWindow()
     publishOutputDirWarning()
-    void runScheduledAutoUpdate()
+    const currentVersion = app.getVersion()
+    const startupSettings = settingsStore.get()
+    const appWasUpdated = Boolean(
+      startupSettings.lastVersion
+      && startupSettings.lastVersion !== currentVersion,
+    )
+    void runScheduledAutoUpdate(appWasUpdated)
     setupAppAutoUpdate()
 
     // Guarded internally by a persistent registry marker (written only on a
@@ -760,8 +766,6 @@ if (isSecondInstance) {
 
     // Detect a completed update: the stored version differs from the running one
     // (and it isn't a first install, where lastVersion is still empty).
-    const currentVersion = app.getVersion()
-    const startupSettings = settingsStore.get()
     if (
       startupSettings.telemetryEnabled
       && startupSettings.lastVersion
